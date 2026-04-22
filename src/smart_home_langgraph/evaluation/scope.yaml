@@ -1,0 +1,69 @@
+# ---------------------------------------------------------------------------
+# scope.yaml  –  Phase 1: Project Scope Definition
+#
+# Purpose:
+#   This file is the single source of truth for WHAT the agent is allowed
+#   to do (in_scope) and what it deliberately does NOT do (out_of_scope).
+#
+#   Why store scope in a YAML file?
+#   - Easy to read and update without touching Python code.
+#   - Later phases can load and check against this file programmatically.
+#   - Makes it clear to anyone reading the project exactly what v1 covers.
+# ---------------------------------------------------------------------------
+
+# The four task categories the agent will handle in version 1.
+# These match the intent labels produced by detect_intent in workflow.py.
+in_scope_task_classes:
+  - energy_optimization      # Analyse power usage and recommend load shifting
+  - comfort_optimization     # Suggest HVAC / climate adjustments based on occupancy
+  - anomaly_explanation      # Explain unusual sensor readings or appliance spikes
+  - general_question         # Catch-all for other smart-home questions
+
+# These are things we deliberately leave out of v1 to keep the project
+# small enough to learn from. They can be added in future phases.
+out_of_scope_v1:
+  - real_device_integration      # No live Home Assistant / Zigbee / MQTT calls
+  - autonomous_actuation         # Agent only advises; it never switches devices itself
+  - model_finetuning             # We learn via memory retrieval, NOT by updating LLM weights
+  - multi_home_deployment        # Single simulated home only
+  - voice_interface              # Text input/output only for now
+
+# ---------------------------------------------------------------------------
+# Success metrics
+#
+# These are the numbers we track across evaluation episodes to show that
+# the agent improves over time.  Each metric is explained below.
+# ---------------------------------------------------------------------------
+success_metrics:
+
+  critique_first_pass_rate:
+    description: >
+      Percentage of responses that pass the critique node on the FIRST attempt
+      without needing a repair loop.
+    target_trend: increasing    # we want this number to go UP over episodes
+    unit: percentage            # 0-100
+
+  repeated_mistake_rate:
+    description: >
+      Percentage of tasks where the agent repeats an error it has already
+      made on a similar task in a previous episode.
+    target_trend: decreasing    # we want this number to go DOWN over episodes
+    unit: percentage
+
+  preference_adherence_rate:
+    description: >
+      Percentage of responses that correctly respect stored user preferences
+      (e.g. quiet hours, preferred temperature range, priority appliances).
+    target_trend: increasing
+    unit: percentage
+
+  recipe_reuse_rate:
+    description: >
+      Percentage of tasks where the agent reuses a previously stored
+      successful solution recipe instead of generating a brand-new plan.
+    target_trend: increasing
+    unit: percentage
+
+# Minimum number of episodes to run before drawing any conclusion.
+# Below this number the metrics are too noisy to be meaningful.
+min_evaluation_episodes: 10
