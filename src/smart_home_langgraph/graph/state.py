@@ -1,30 +1,78 @@
-# ---------------------------------------------------------------------------
+﻿# ---------------------------------------------------------------------------
 # graph/state.py
-# Purpose: Define the shared state that flows through the entire LangGraph.
+# Purpose: Unified typed state schema for the smart-home agent.
 #
-# What is a LangGraph state?
-#   Every node in the graph receives the current state as input and returns
-#   an updated copy of that state as output. The graph merges the update
-#   automatically and passes it to the next node.
-#   Think of it as a shared notebook that every node can read and write to.
+# AgentState is the shared "notebook" passed between every node in the graph.
+# Each node receives this dict, reads the fields it needs, adds/updates
+# its own fields, and returns the updated dict.
 #
-# Why TypedDict?
-#   TypedDict lets us use a plain Python dict but with type hints on every
-#   key, so editors and type checkers warn us if we use the wrong field name.
+# Fields by concern:
+#   - Query + intent:    what the user asked and how we classified it
+#   - Context:           sensor summary + long-term memory retrieved for this run
+#   - Response:          the final answer and whether it came from a live LLM call
+#   - Critique + repair: structured quality evaluation and self-repair tracking
+#   - Learning metrics:  episode outcome recorded for trend analysis
 # ---------------------------------------------------------------------------
 from __future__ import annotations
 
 from typing import TypedDict
 
+from smart_home_langgraph.evaluation.metrics import EpisodeRecord
+
+
+class CritiqueResult(TypedDict):
+    """Structured output from the critique node."""
+
+    # True if response passes quality check, False if repairs needed.
+    passed: bool
+
+    # List of identified issues (empty if passed).
+    issues: list[str]
+
+    # Severity level: "critical", "medium", or "low".
+    severity: str
+
+    # Hints/suggestions for repairing the response.
+    repair_hints: str
+
 
 class AgentState(TypedDict):
-    # The raw natural-language question or task from the user.
+    """Complete state schema shared by every node in the workflow."""
+
+    # ---- User input --------------------------------------------------------
+    # The raw natural-language question from the user.
     user_query: str
 
-    # The category we assign after reading the query, e.g. "energy_optimization".
-    # Starts as an empty string; the detect_intent node fills it in.
+    # Intent label inferred from the query (e.g. "energy_optimization").
     intent: str
 
-    # The final answer we will show the user.
-    # Starts as an empty string; the build_response node fills it in.
+    # ---- Context (populated by retrieve_context node) ----------------------
+    # Short text summary of recent sensor data from the time-series simulator.
+    sensor_context: str
+
+    # Long-term memory context assembled from mistakes, recipes, preferences.
+    memory_context: str
+
+    # ---- Response (populated by generate_response / repair_response nodes) --
+    # The final answer to return to the user. May be regenerated on repair.
     response: str
+
+    # True when Gemini API was called successfully; False when fallback was used.
+    used_live_llm: bool
+
+    # ---- Critique + repair loop --------------------------------------------
+    # Structured quality feedback from the critique node.
+    critique_result: CritiqueResult
+
+    # Current repair attempt count (starts at 0, incremented on each repair).
+    repair_count: int
+
+    # Maximum number of repair attempts allowed before exiting the loop.
+    max_repairs: int
+
+    # ---- Learning metrics --------------------------------------------------
+    # Per-episode outcome metrics populated by the memory_writer node.
+    episode_record: EpisodeRecord
+
+    # Number of records written to memory stores in this episode.
+    memory_written_count: int

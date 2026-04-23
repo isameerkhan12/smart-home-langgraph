@@ -1,0 +1,75 @@
+[
+  {
+    "task_class": "energy_optimization",
+    "strategy_steps": [
+      "Here are some ways to reduce your evening power usage:",
+      "*   **Optimize Lighting**: Turn off lights in unoccupied rooms and utilize energy-efficient LED bulbs.",
+      "*   **Manage Electronics**: Unplug chargers and power down entertainment systems (TVs, gaming consoles) completely when not in use to eliminate standby power.",
+      "*   **Adjust Thermostat**: Set your thermostat a few degrees cooler in the evening, especially before bed, to reduce heating/cooling load.",
+      "*   **Efficient Cooking**: For evening meals, prioritize using smaller appliances like microwaves or air fryers over the oven when practical.",
+      "*   **Reduce Hot Water Use**: Take shorter showers or consider lowering your water heater temperature slightly."
+    ],
+    "critique_score": 0.9,
+    "conditions": ""
+  },
+  {
+    "task_class": "energy_optimization",
+    "strategy_steps": [
+      "Here are some ways to reduce your evening power usage:",
+      "*   **Optimize Lighting**: Turn off lights in unoccupied rooms and utilize energy-efficient LED bulbs.",
+      "*   **Manage Electronics**: Unplug chargers and power down entertainment systems completely when not in use to eliminate standby power.",
+      "*   **Adjust Thermostat**: Set your thermostat a few degrees cooler in the evening, especially before bed, to reduce heating/cooling load.",
+      "*   **Efficient Cooking**: For evening meals, prioritize using smaller appliances like microwaves or air fryers over the oven when practical.",
+      "*   **Reduce Hot Water Use**: Take shorter showers or consider lowering your water heater temperature slightly."
+    ],
+    "critique_score": 0.9,
+    "conditions": ""
+  },
+  {
+    "task_class": "energy_optimization",
+    "strategy_steps": [
+      "Here are 3 practical ways to reduce your evening power usage:",
+      "*   **Optimize Lighting**: Turn off lights in unoccupied rooms and utilize energy-efficient LED bulbs.",
+      "*   **Manage Electronics**: Unplug chargers and power down entertainment systems completely when not in use to eliminate standby power.",
+      "*   **Adjust Thermostat**: Set your thermostat a few degrees cooler in the evening, especially before bed, to reduce heating/cooling load."
+    ],
+    "critique_score": 0.9,
+    "conditions": ""
+  },
+  {
+    "task_class": "energy_optimization",
+    "strategy_steps": [
+      "Here are 3 practical ways to reduce your evening power usage:",
+      "*   **Optimize Lighting**: Turn off lights in unoccupied rooms and utilize energy-efficient LED bulbs.",
+      "*   **Manage Electronics**: Unplug chargers and power down entertainment systems (TVs, gaming consoles) completely when not in use to eliminate standby power.",
+      "*   **Adjust Thermostat**: Set your thermostat a few degrees cooler in the evening, especially before bed, to reduce heating/cooling load.",
+      "*   **Efficient Cooking**: For evening meals, prioritize using smaller appliances like microwaves or air fryers over the oven when practical."
+    ],
+    "critique_score": 0.7,
+    "conditions": ""
+  },
+  {
+    "task_class": "energy_optimization",
+    "strategy_steps": [
+      "[Phase 3 fallback: live Gemini call not used] Reason: Gemini error: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}}. Intent detected: energy_optimization. Use sensor and memory context to produce a practical next step."
+    ],
+    "critique_score": 0.9,
+    "conditions": ""
+  },
+  {
+    "task_class": "energy_optimization",
+    "strategy_steps": [
+      "[Phase 3 fallback: live Gemini call not used] Reason: Gemini error: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}}. Intent detected: energy_optimization. Use sensor and memory context to produce a practical next step."
+    ],
+    "critique_score": 0.9,
+    "conditions": ""
+  },
+  {
+    "task_class": "energy_optimization",
+    "strategy_steps": [
+      "[Phase 3 fallback: live Gemini call not used] Reason: Gemini error: Error calling model 'gemini-2.5-flash' (RESOURCE_EXHAUSTED): 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash\\nPlease retry in 49.946601808s.', 'status': 'RESOURCE_EXHAUSTED', 'details': [{'@type': 'type.googleapis.com/google.rpc.Help', 'links': [{'description': 'Learn more about Gemini API quotas', 'url': 'https://ai.google.dev/gemini-api/docs/rate-limits'}]}, {'@type': 'type.googleapis.com/google.rpc.QuotaFailure', 'violations': [{'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_requests', 'quotaId': 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', 'quotaDimensions': {'model': 'gemini-2.5-flash', 'location': 'global'}, 'quotaValue': '20'}]}, {'@type': 'type.googleapis.com/google.rpc.RetryInfo', 'retryDelay': '49s'}]}}. Intent detected: energy_optimization. Use sensor and memory context to produce a practical next step."
+    ],
+    "critique_score": 0.9,
+    "conditions": ""
+  }
+]

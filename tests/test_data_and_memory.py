@@ -1,12 +1,12 @@
 # ---------------------------------------------------------------------------
-# tests/test_phase2_data_and_memory.py  –  Phase 2 Tests
+# tests/test_data_and_memory.py
 #
 # What we test:
-#   Part A – SmartHomeSimulator
-#     1. generate() produces the right number of rows and expected columns
-#     2. daily_summary() produces one row per day
+#   Part A – HomeDataLoader (reads from home_data.xlsx)
+#     1. load() returns a DataFrame with the expected columns
+#     2. Loaded data has sensible value ranges
 #     3. context_window() returns a non-empty text summary
-#     4. Anomaly rows exist when anomaly_probability is high
+#     4. Anomaly rows are present in the sample data
 #
 #   Part B – Memory Stores (PreferenceMemory, MistakeMemory, RecipeMemory)
 #     5. Save and reload a preference; verify round-trip
@@ -24,7 +24,7 @@ import tempfile   # creates temporary directories for test files;
 
 import pytest
 
-from smart_home_langgraph.data.simulator import SmartHomeSimulator
+from smart_home_langgraph.data.loader import HomeDataLoader
 from smart_home_langgraph.memory.store import (
     PreferenceMemory, UserPreference,
     MistakeMemory,    MistakeRecord,
@@ -34,15 +34,15 @@ from smart_home_langgraph.memory.retriever import MemoryRetriever
 
 
 # ===========================================================================
-# Part A — SmartHomeSimulator
+# Part A — HomeDataLoader
 # ===========================================================================
 
-def test_generate_row_count_and_columns() -> None:
-    sim = SmartHomeSimulator(seed=0)
-    df  = sim.generate(days=3)
+def test_load_returns_dataframe_with_expected_columns() -> None:
+    loader = HomeDataLoader()
+    df = loader.load()
 
-    # 3 days × 24 hours × 4 intervals/hour = 288 rows
-    assert len(df) == 288, f"Expected 288 rows, got {len(df)}"
+    # The Excel file has 48 rows (2 days × 24 hours).
+    assert len(df) == 48, f"Expected 48 rows, got {len(df)}"
 
     # All six expected columns must be present.
     expected_cols = {"timestamp", "temperature_c", "humidity_pct",
@@ -50,44 +50,32 @@ def test_generate_row_count_and_columns() -> None:
     assert expected_cols == set(df.columns)
 
 
-def test_generate_value_ranges() -> None:
-    sim = SmartHomeSimulator(seed=1)
-    df  = sim.generate(days=7)
+def test_loaded_data_has_valid_value_ranges() -> None:
+    loader = HomeDataLoader()
+    df = loader.load()
 
-    # Humidity must always be within the clamped range.
-    assert df["humidity_pct"].between(20, 90).all(), "Humidity out of range"
+    # Humidity must be within realistic bounds.
+    assert df["humidity_pct"].between(0, 100).all(), "Humidity out of range"
     # Power must never be negative.
     assert (df["power_kw"] >= 0).all(), "Negative power values found"
     # Occupancy must only be 0 or 1.
     assert df["occupancy"].isin([0, 1]).all(), "Occupancy has values other than 0/1"
 
 
-def test_daily_summary_one_row_per_day() -> None:
-    sim = SmartHomeSimulator(seed=2)
-    df  = sim.generate(days=5)
-    summary = sim.daily_summary(df)
-
-    # One summary row per calendar day.
-    assert len(summary) == 5
-    # Must include the key computed columns.
-    assert "total_power_kwh" in summary.columns
-    assert "anomaly_count"   in summary.columns
-
-
 def test_context_window_returns_text() -> None:
-    sim  = SmartHomeSimulator(seed=3)
-    df   = sim.generate(days=2)
-    text = sim.context_window(df, hours=24)
+    loader = HomeDataLoader()
+    text = loader.context_window(hours=24)
 
     # Must be a non-empty string with at least the header.
     assert isinstance(text, str)
-    assert "Sensor data window" in text
+    assert "Sensor summary" in text
+    assert "temperature" in text
 
 
 def test_anomaly_rows_present_with_high_probability() -> None:
-    sim = SmartHomeSimulator(seed=7)
-    # Set anomaly_probability very high so anomalies are almost certain.
-    df  = sim.generate(days=3, anomaly_probability=0.5)
+    loader = HomeDataLoader()
+    df = loader.load()
+    # The dummy data has 2 anomaly rows on day 2 evening.
     assert df["anomaly"].sum() > 0, "Expected at least one anomaly row"
 
 
