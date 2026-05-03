@@ -71,5 +71,68 @@
     ],
     "critique_score": 0.9,
     "conditions": ""
+  },
+  {
+    "task_class": "energy_optimization",
+    "strategy_steps": [
+      "echo: How can I save energy?"
+    ],
+    "critique_score": 0.9,
+    "conditions": ""
+  },
+  {
+    "task_class": "general_question",
+    "strategy_steps": [
+      "echo: What should I try first?"
+    ],
+    "critique_score": 0.9,
+    "conditions": ""
+  },
+  {
+    "task_class": "general_question",
+    "strategy_steps": [
+      "ok"
+    ],
+    "critique_score": 0.9,
+    "conditions": ""
+  },
+  {
+    "task_class": "general_question",
+    "strategy_steps": [
+      "*   Hello!",
+      "*   I'm ready to assist you today.",
+      "*   I've noted 2 anomaly readings in the last 24 hours.",
+      "*   Would you like me to investigate those, or is there something else I can help with first?"
+    ],
+    "critique_score": 0.9,
+    "conditions": ""
+  },
+  {
+    "task_class": "general_question",
+    "strategy_steps": [
+      "*   Hello Sameer!",
+      "*   It's good to connect with you.",
+      "*   How can I help you today?"
+    ],
+    "critique_score": 0.7,
+    "conditions": ""
+  },
+  {
+    "task_class": "general_question",
+    "strategy_steps": [
+      "*   I don't have your name stored in my memory at the moment.",
+      "*   I can learn your name if you'd like to tell me.",
+      "*   Just say something like, \"My name is [Your Name],\" and I'll remember it."
+    ],
+    "critique_score": 0.9,
+    "conditions": ""
+  },
+  {
+    "task_class": "general_question",
+    "strategy_steps": [
+      "*   Your name is Sameer."
+    ],
+    "critique_score": 0.9,
+    "conditions": ""
   }
 ]

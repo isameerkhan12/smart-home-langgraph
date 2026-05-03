@@ -35,6 +35,8 @@ from __future__ import annotations
 import os
 from typing import Callable
 
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, StateGraph
 
 from smart_home_langgraph.data.loader import HomeDataLoader
@@ -51,7 +53,11 @@ ResponseGenerator = Callable[[AgentState], tuple[str, bool]]
 CritiqueGenerator = Callable[[AgentState], CritiqueResult]
 
 
-def initial_state(query: str, max_repairs: int = 2) -> AgentState:
+def initial_state(
+    query: str,
+    max_repairs: int = 2,
+    conversation_history: list[BaseMessage] | None = None,
+) -> AgentState:
     """
     Return the default initial state for starting a new agent run.
 
@@ -59,6 +65,7 @@ def initial_state(query: str, max_repairs: int = 2) -> AgentState:
     """
     return {
         "user_query": query,
+        "conversation_history": list(conversation_history or []),
         "intent": "",
         "sensor_context": "",
         "memory_context": "",
@@ -99,6 +106,7 @@ def build_workflow(
     critique_generator: CritiqueGenerator | None = None,
     loader: HomeDataLoader | None = None,
     memory_retriever: MemoryRetriever | None = None,
+    checkpointer: SqliteSaver | None = None,
     max_repairs: int = 2,
 ):
     """
@@ -109,10 +117,12 @@ def build_workflow(
                           Default: generate_with_gemini (real Gemini call).
       critique_generator  Callable that returns a CritiqueResult dict.
                           Default: critique_response (real Gemini critique).
-    loader              HomeDataLoader that reads sensor data from Excel.
-                  Default: reads data/home_data.xlsx.
+      loader              HomeDataLoader that reads sensor data from Excel.
+                            Default: reads data/home_data.xlsx.
       memory_retriever    MemoryRetriever backed by JSON files.
                           Default: runtime_memory/ in the working directory.
+      checkpointer        LangGraph checkpointer for persistent chat state.
+                            Default: no checkpointing.
       max_repairs         Maximum repair loop iterations. Default: 2.
     """
     data_loader = loader or HomeDataLoader()
@@ -154,6 +164,16 @@ def build_workflow(
         """Call Gemini (or injected fake) to produce the initial response."""
         response_text, used_live_llm = response_gen(state)
         return {**state, "response": response_text, "used_live_llm": used_live_llm}
+
+    def record_turn(state: AgentState) -> AgentState:
+        """Append the completed user/assistant turn to chat history."""
+        return {
+            **state,
+            "conversation_history": [
+                HumanMessage(content=state["user_query"]),
+                AIMessage(content=state["response"]),
+            ],
+        }
 
     def critique_node(state: AgentState) -> AgentState:
         """Evaluate response quality; store structured result for routing."""
@@ -224,6 +244,7 @@ def build_workflow(
     graph.add_node("generate_response", generate_response)
     graph.add_node("critique_response", critique_node)
     graph.add_node("repair_response", repair_node)
+    graph.add_node("record_turn", record_turn)
     graph.add_node("memory_writer", memory_writer_node)
 
     graph.set_entry_point("detect_intent")
@@ -238,6 +259,7 @@ def build_workflow(
     )
 
     graph.add_edge("repair_response", "critique_response")
-    graph.add_edge("memory_writer", END)
+    graph.add_edge("memory_writer", "record_turn")
+    graph.add_edge("record_turn", END)
 
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)

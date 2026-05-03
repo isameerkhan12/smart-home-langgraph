@@ -12,10 +12,12 @@ Beginner-friendly LangGraph smart-home agent with:
 
 From project root in PowerShell:
 
+Interactive chat mode:
+
 ```powershell
 .\.venv\Scripts\Activate.ps1
 $env:PYTHONPATH = "src"
-python -m smart_home_langgraph.main --query "How can I reduce my evening power usage?"
+python -m smart_home_langgraph.main --max-repairs "{value}" --thread "{thread_id}"
 ```
 
 ## Full step-by-step guide

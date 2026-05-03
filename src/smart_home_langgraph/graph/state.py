@@ -15,7 +15,10 @@
 # ---------------------------------------------------------------------------
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Annotated, TypedDict
+
+from langchain_core.messages import BaseMessage
+from langgraph.graph.message import add_messages
 
 from smart_home_langgraph.evaluation.metrics import EpisodeRecord
 
@@ -42,6 +45,9 @@ class AgentState(TypedDict):
     # ---- User input --------------------------------------------------------
     # The raw natural-language question from the user.
     user_query: str
+
+    # Conversation messages merged with LangGraph's message-aware reducer.
+    conversation_history: Annotated[list[BaseMessage], add_messages]
 
     # Intent label inferred from the query (e.g. "energy_optimization").
     intent: str
