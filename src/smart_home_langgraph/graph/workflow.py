@@ -35,7 +35,7 @@ from __future__ import annotations
 import os
 from typing import Callable
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, SystemMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, StateGraph
 
@@ -66,6 +66,7 @@ def initial_state(
     return {
         "user_query": query,
         "conversation_history": list(conversation_history or []),
+        "summary": "",
         "intent": "",
         "sensor_context": "",
         "memory_context": "",
@@ -175,6 +176,47 @@ def build_workflow(
             ],
         }
 
+    def should_summarize(state: AgentState) -> str:
+        """Route to summarize_node if conversation > 6 messages, else continue to generate."""
+        if len(state["conversation_history"]) > 6:
+            return "summarize"
+        return "continue"
+
+    def summarize_node(state: AgentState) -> AgentState:
+        """
+        Summarize older messages to keep context window manageable.
+        Keeps last 2 messages, summarizes the rest, removes originals using RemoveMessage.
+        """
+        history = state["conversation_history"]
+        
+        if len(history) > 6:
+            # Keep last 2 messages, summarize everything else
+            msgs_to_summarize = history[:-2]
+            last_2_msgs = history[-2:]
+            
+            # Call generate_with_gemini with is_summary flag (uses _build_summary_prompt, no smart-home context pollution)
+            summary_content, _ = generate_with_gemini(is_summary=True, messages_to_summarize=msgs_to_summarize)
+            
+            # Create summary message and remove old ones
+            summary_msg = SystemMessage(
+                content=f"[CONTEXT SUMMARY]\n{summary_content}"
+            )
+            
+            # Build RemoveMessage for each summarized message that has an ID
+            remove_messages = [
+                RemoveMessage(id=m.id) 
+                for m in msgs_to_summarize 
+                if hasattr(m, "id") and m.id is not None
+            ]
+            
+            return {
+                **state,
+                "conversation_history": remove_messages + [summary_msg] + last_2_msgs,
+                "summary": summary_content,
+            }
+        
+        return state
+
     def critique_node(state: AgentState) -> AgentState:
         """Evaluate response quality; store structured result for routing."""
         result = critique_gen(state)
@@ -241,6 +283,7 @@ def build_workflow(
 
     graph.add_node("detect_intent", detect_intent)
     graph.add_node("retrieve_context", retrieve_context)
+    graph.add_node("summarize", summarize_node)
     graph.add_node("generate_response", generate_response)
     graph.add_node("critique_response", critique_node)
     graph.add_node("repair_response", repair_node)
@@ -250,6 +293,14 @@ def build_workflow(
     graph.set_entry_point("detect_intent")
     graph.add_edge("detect_intent", "retrieve_context")
     graph.add_edge("retrieve_context", "generate_response")
+    
+    # Check if summarization is needed after retrieve_context
+    graph.add_conditional_edges(
+        "retrieve_context",
+        should_summarize,
+        {"summarize": "summarize", "continue": "generate_response"},
+    )
+    graph.add_edge("summarize", "generate_response")
     graph.add_edge("generate_response", "critique_response")
 
     graph.add_conditional_edges(

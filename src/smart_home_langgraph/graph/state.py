@@ -49,6 +49,9 @@ class AgentState(TypedDict):
     # Conversation messages merged with LangGraph's message-aware reducer.
     conversation_history: Annotated[list[BaseMessage], add_messages]
 
+    # Summary of earlier messages kept separate to avoid losing context.
+    summary: str
+
     # Intent label inferred from the query (e.g. "energy_optimization").
     intent: str
 
