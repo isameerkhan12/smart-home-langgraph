@@ -134,5 +134,65 @@
     ],
     "critique_score": 0.9,
     "conditions": ""
+  },
+  {
+    "task_class": "general_question",
+    "strategy_steps": [
+      "*   Okay.",
+      "*   How can I assist you with your smart home today?",
+      "*   I can help with tasks like adjusting your thermostat, controlling lights, or providing sensor information.",
+      "*   Please let me know if you have a specific question or request."
+    ],
+    "critique_score": 0.7,
+    "conditions": ""
+  },
+  {
+    "task_class": "general_question",
+    "strategy_steps": [
+      "*   I do not have access to personal information such as your workplace.",
+      "*   My function as a smart home assistant is to manage your home environment.",
+      "*   For privacy and security reasons, I do not store details about your employment.",
+      "*   You would need to refer to your own personal records for this information."
+    ],
+    "critique_score": 0.9,
+    "conditions": ""
+  },
+  {
+    "task_class": "general_question",
+    "strategy_steps": [
+      "*   Hello Sameer! It's nice to meet you.",
+      "*   I've noted your name for our conversation.",
+      "*   How can I assist you with your smart home today?"
+    ],
+    "critique_score": 0.9,
+    "conditions": ""
+  },
+  {
+    "task_class": "general_question",
+    "strategy_steps": [
+      "*   Your name is Sameer."
+    ],
+    "critique_score": 0.9,
+    "conditions": ""
+  },
+  {
+    "task_class": "general_question",
+    "strategy_steps": [
+      "*   I don't have your name stored in my current memory or sensor data.",
+      "*   My primary function is to manage your smart home based on sensor data and your commands.",
+      "*   I don't typically store personal identifying information like names for privacy reasons.",
+      "*   Is there something else I can help you with regarding your smart home?",
+      "*   I can tell you about the current temperature, humidity, or power usage if you'd like."
+    ],
+    "critique_score": 0.9,
+    "conditions": ""
+  },
+  {
+    "task_class": "general_question",
+    "strategy_steps": [
+      "[Phase 3 fallback: live Gemini call not used] Reason: Gemini error: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}}. Intent detected: general_question. Use sensor and memory context to produce a practical next step."
+    ],
+    "critique_score": 0.9,
+    "conditions": ""
   }
 ]

@@ -313,4 +313,4 @@ def build_workflow(
     graph.add_edge("memory_writer", "record_turn")
     graph.add_edge("record_turn", END)
 
-    return graph.compile(checkpointer=checkpointer)
+    return graph.compile(checkpointer=checkpointer) # pass a store here
