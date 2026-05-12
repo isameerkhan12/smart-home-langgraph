@@ -1,9 +1,9 @@
-﻿# ---------------------------------------------------------------------------
+﻿# ---------------------------------------------------------------------------------
 # graph/workflow.py
 # Purpose: The unified smart-home agent workflow.
-#
+
 # Graph shape:
-#
+
 #   [START]
 #      |
 #      v
@@ -24,12 +24,12 @@
 #                                                 |
 #                                                 v
 #                                          critique_response  (loop)
-#
+
 # Dependency injection:
 #   build_workflow() accepts optional callable overrides for the LLM generator
 #   and critique evaluator. Tests pass fake callables so they run fast and
 #   never touch external APIs.
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------
 from __future__ import annotations
 
 import os
