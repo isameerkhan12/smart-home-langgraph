@@ -19,6 +19,12 @@ from dotenv import load_dotenv     # reads the .env file and loads each line as 
 @dataclass(frozen=True)
 class Settings:
     gemini_api_key: str | None  # will be None if the env var is missing
+    # Postgres DSN used by LangGraph PostgresStore for LTM.
+    postgres_uri: str | None
+    # Embedding model used for vectorizing memory content.
+    gemini_embedding_model: str
+    # Embedding vector dimension; must match the selected model.
+    gemini_embedding_dims: int
 
 
 def get_settings() -> Settings:
@@ -26,4 +32,9 @@ def get_settings() -> Settings:
     # load_dotenv() reads .env from the project root and puts each key=value
     # pair into the process environment so os.getenv() can read them.
     load_dotenv()
-    return Settings(gemini_api_key=os.getenv("GEMINI_API_KEY"))
+    return Settings(
+        gemini_api_key=os.getenv("GEMINI_API_KEY"),
+        postgres_uri=os.getenv("POSTGRES_URI"),
+        gemini_embedding_model=os.getenv("GEMINI_EMBEDDING_MODEL", "models/embedding-001"),
+        gemini_embedding_dims=int(os.getenv("GEMINI_EMBEDDING_DIMS", "768")),
+    )

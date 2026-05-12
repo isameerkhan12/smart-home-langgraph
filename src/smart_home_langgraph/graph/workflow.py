@@ -32,21 +32,22 @@
 # ---------------------------------------------------------------------------------
 from __future__ import annotations
 
-import os
+import uuid
 from typing import Callable
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, StateGraph
+from langgraph.store.base import BaseStore
 
 from smart_home_langgraph.data.loader import HomeDataLoader
 from smart_home_langgraph.evaluation.metrics import EpisodeRecord
 from smart_home_langgraph.graph.state import AgentState, CritiqueResult
-from smart_home_langgraph.memory.retriever import MemoryRetriever
-from smart_home_langgraph.memory.store import MistakeMemory, PreferenceMemory, RecipeMemory
+from smart_home_langgraph.memory.ltm_schema import MemoryType
 from smart_home_langgraph.services.critique_client import critique_response
 from smart_home_langgraph.services.gemini_client import generate_with_gemini
-from smart_home_langgraph.services.memory_writer import write_learnings
+from smart_home_langgraph.services.memory_extractor import extract_structured_memories
 
 # Type aliases for injectable callables (used for dependency injection in tests).
 ResponseGenerator = Callable[[AgentState], tuple[str, bool]]
@@ -92,22 +93,13 @@ def initial_state(
     }
 
 
-def _default_memory_retriever(base_dir: str) -> MemoryRetriever:
-    """Create JSON-backed memory stores under a runtime directory."""
-    os.makedirs(base_dir, exist_ok=True)
-    return MemoryRetriever(
-        mistake_store=MistakeMemory(os.path.join(base_dir, "mistakes.json")),
-        recipe_store=RecipeMemory(os.path.join(base_dir, "recipes.json")),
-        preference_store=PreferenceMemory(os.path.join(base_dir, "preferences.json")),
-    )
-
-
 def build_workflow(
     response_generator: ResponseGenerator | None = None,
     critique_generator: CritiqueGenerator | None = None,
     loader: HomeDataLoader | None = None,
-    memory_retriever: MemoryRetriever | None = None,
     checkpointer: SqliteSaver | None = None,
+    # Native LangGraph long-term store (e.g., PostgresStore).
+    store: BaseStore | None = None,
     max_repairs: int = 2,
 ):
     """
@@ -120,18 +112,33 @@ def build_workflow(
                           Default: critique_response (real Gemini critique).
       loader              HomeDataLoader that reads sensor data from Excel.
                             Default: reads data/home_data.xlsx.
-      memory_retriever    MemoryRetriever backed by JSON files.
-                          Default: runtime_memory/ in the working directory.
       checkpointer        LangGraph checkpointer for persistent chat state.
                             Default: no checkpointing.
+      store               LangGraph BaseStore for long-term memory.
+                            Default: no persistent store.
       max_repairs         Maximum repair loop iterations. Default: 2.
     """
     data_loader = loader or HomeDataLoader()
-    retriever = memory_retriever or _default_memory_retriever(
-        os.path.join(os.getcwd(), "runtime_memory")
-    )
     response_gen = response_generator or generate_with_gemini
     critique_gen = critique_generator or critique_response
+
+    # Memory namespace layout: (app, entity, user_id, collection)
+    namespace_root = ("smart_home", "users")
+
+    def memory_namespace(config: RunnableConfig | None) -> tuple[str, str, str, str]:
+        user_id = (config or {}).get("configurable", {}).get("user_id", "default_user")
+        return (*namespace_root, user_id, "typed_memories")
+
+    def format_memories_for_prompt(items: list) -> str:
+        if not items:
+            return "No relevant long-term memories found."
+        lines: list[str] = []
+        for item in items:
+            content = item.value.get("content", "").strip()
+            memory_type = item.value.get("memory_type", MemoryType.GENERAL.value)
+            if content:
+                lines.append(f"- [{memory_type}] {content}")
+        return "\n".join(lines) if lines else "No relevant long-term memories found."
 
     # ------------------------------------------------------------------
     # Node definitions (closures capture sim, retriever, response_gen, etc.)
@@ -151,14 +158,23 @@ def build_workflow(
             intent = "general_question"
         return {**state, "intent": intent}
 
-    def retrieve_context(state: AgentState) -> AgentState:
+    def retrieve_context(
+        state: AgentState,
+        config: RunnableConfig | None = None,
+        *,
+        store: BaseStore | None = None,
+    ) -> AgentState:
         """
         Build two context strings injected into the generation prompt:
           1. sensor_context  — recent 24h sensor summary from the simulator
           2. memory_context  — mistakes + recipes + preferences from memory stores
         """
         sensor_context = data_loader.context_window(hours=24)
-        memory_context = retriever.retrieve(state["intent"]) # this type os task what should i remember
+        if store is None:
+            memory_context = "No long-term memory store configured."
+        else:
+            memories = store.search(memory_namespace(config), query=state["user_query"], limit=8)
+            memory_context = format_memories_for_prompt(memories)
         return {**state, "sensor_context": sensor_context, "memory_context": memory_context}
 
     def generate_response(state: AgentState) -> AgentState:
@@ -242,26 +258,64 @@ def build_workflow(
             "repair_count": state["repair_count"] + 1,
         }
 
-    def memory_writer_node(state: AgentState) -> AgentState:
+    def memory_writer_node(
+        state: AgentState,
+        config: RunnableConfig | None = None,
+        *,
+        store: BaseStore | None = None,
+    ) -> AgentState:
         """
-        Write learnings to persistent memory and populate episode metrics.
+        Write typed long-term memories to the LangGraph store.
 
-        - Failed critique  → write issues + corrective rules to MistakeMemory
-        - Passed critique  → write strategy to RecipeMemory (score 0.9 or 0.7)
+        Memory extraction is delegated to a structured-output LLM call and
+        duplicate suppression is performed via the returned `is_new` flags.
         """
-        outcome = write_learnings(state, retriever._mistakes, retriever._recipes)
+        memories_written = 0
+
+        if store is not None:
+            ns = memory_namespace(config)
+            existing_items = store.search(ns, limit=30)
+            existing_memories_text = "\n".join(
+                item.value.get("content", "") for item in existing_items if item.value.get("content")
+            ) or "(empty)"
+
+            decision = extract_structured_memories(
+                user_query=state["user_query"],
+                assistant_response=state["response"],
+                intent=state["intent"],
+                critique_passed=state["critique_result"]["passed"],
+                critique_issues=state["critique_result"]["issues"],
+                existing_memories_text=existing_memories_text,
+            )
+
+            if decision.should_write:
+                for memory in decision.memories:
+                    if not memory.is_new or not memory.text.strip():
+                        continue
+                    store.put(
+                        ns,
+                        str(uuid.uuid4()),
+                        {
+                            "content": memory.text.strip(),
+                            "memory_type": memory.memory_type.value,
+                            "intent": state["intent"],
+                            "metadata": memory.metadata,
+                        },
+                    )
+                    memories_written += 1
+
         episode = EpisodeRecord(
             episode_id=1,
             task_class=state["intent"],
-            critique_passed_first_try=outcome.critique_first_pass,
+            critique_passed_first_try=state["repair_count"] == 0 and state["critique_result"]["passed"],
             repeated_known_mistake=False,
             preferences_respected=False,
-            used_existing_recipe=outcome.recipes_written > 0,
+            used_existing_recipe="[recipe]" in state["memory_context"].lower(),
         )
         return {
             **state,
             "episode_record": episode,
-            "memory_written_count": outcome.mistakes_written + outcome.recipes_written,
+            "memory_written_count": memories_written,
         }
 
     def should_repair(state: AgentState) -> str:
@@ -313,4 +367,5 @@ def build_workflow(
     graph.add_edge("memory_writer", "record_turn")
     graph.add_edge("record_turn", END)
 
-    return graph.compile(checkpointer=checkpointer) # pass a store here
+    # Compile with both STM (checkpointer) and optional LTM (store).
+    return graph.compile(checkpointer=checkpointer, store=store)
