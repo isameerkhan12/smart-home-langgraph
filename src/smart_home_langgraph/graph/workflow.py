@@ -158,12 +158,7 @@ def build_workflow(
             intent = "general_question"
         return {**state, "intent": intent}
 
-    def retrieve_context(
-        state: AgentState,
-        config: RunnableConfig | None = None,
-        *,
-        store: BaseStore | None = None,
-    ) -> AgentState:
+    def retrieve_context(state: AgentState,config: RunnableConfig | None = None,*,store: BaseStore | None = None,) -> AgentState:
         """
         Build two context strings injected into the generation prompt:
           1. sensor_context  — recent 24h sensor summary from the simulator
@@ -258,12 +253,7 @@ def build_workflow(
             "repair_count": state["repair_count"] + 1,
         }
 
-    def memory_writer_node(
-        state: AgentState,
-        config: RunnableConfig | None = None,
-        *,
-        store: BaseStore | None = None,
-    ) -> AgentState:
+    def memory_writer_node(state: AgentState,config: RunnableConfig | None = None,*,store: BaseStore | None = None,) -> AgentState:
         """
         Write typed long-term memories to the LangGraph store.
 

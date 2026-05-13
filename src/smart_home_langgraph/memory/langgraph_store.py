@@ -41,6 +41,7 @@ def create_postgres_store() -> AbstractContextManager[BaseStore] | None:
         # Standard PostgreSQL connection string.
         settings.postgres_uri,
         # Vector index configuration used by pgvector-backed semantic search.
+
         index={
             # Embedding dimension must match the selected embedding model.
             "dims": settings.gemini_embedding_dims,
