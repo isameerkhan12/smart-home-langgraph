@@ -16,6 +16,7 @@ Interactive chat mode:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
+docker compose up -d postgres
 $env:PYTHONPATH = "src"
 python -m smart_home_langgraph.main --max-repairs "{value}" --thread "{thread_id}"
 ```
