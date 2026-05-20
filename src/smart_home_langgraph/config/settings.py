@@ -35,6 +35,6 @@ def get_settings() -> Settings:
     return Settings(
         gemini_api_key=os.getenv("GEMINI_API_KEY"),
         postgres_uri=os.getenv("POSTGRES_URI"),
-        gemini_embedding_model=os.getenv("GEMINI_EMBEDDING_MODEL", "models/embedding-001"),
+        gemini_embedding_model=os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-2"),
         gemini_embedding_dims=int(os.getenv("GEMINI_EMBEDDING_DIMS", "768")),
     )

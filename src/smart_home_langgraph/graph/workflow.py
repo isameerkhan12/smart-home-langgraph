@@ -4,8 +4,6 @@
 #   and critique evaluator. Tests pass fake callables so they run fast and
 #   never touch external APIs.
 # ---------------------------------------------------------------------------------
-from __future__ import annotations
-
 import uuid
 from typing import Callable
 

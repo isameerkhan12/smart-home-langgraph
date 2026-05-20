@@ -47,7 +47,7 @@ Example .env:
 
 GEMINI_API_KEY=your_real_key_here
 POSTGRES_URI=postgresql://postgres:postgres@localhost:5442/postgres
-GEMINI_EMBEDDING_MODEL=models/embedding-001
+GEMINI_EMBEDDING_MODEL=gemini-embedding-2
 GEMINI_EMBEDDING_DIMS=768
 
 Notes:

@@ -33,6 +33,7 @@ def create_postgres_store() -> AbstractContextManager[BaseStore] | None:
     embeddings = GoogleGenerativeAIEmbeddings(
         model=settings.gemini_embedding_model,
         google_api_key=settings.gemini_api_key,
+        output_dimensionality=settings.gemini_embedding_dims,
     )
 
     # from_conn_string returns a context manager (not an opened store yet).
