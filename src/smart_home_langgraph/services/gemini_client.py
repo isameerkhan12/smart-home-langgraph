@@ -11,11 +11,13 @@ from __future__ import annotations
 from langchain_core.messages import HumanMessage, SystemMessage, trim_messages
 from langchain_core.messages.utils import count_tokens_approximately
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langsmith import traceable
 
 from smart_home_langgraph.config.settings import get_settings
 from smart_home_langgraph.graph.state import AgentState
 
 
+@traceable(name="build_generation_prompt", run_type="prompt")
 def _build_prompt_messages(state: AgentState, max_tokens: int = 2000) -> list:
     """Build a chat-style prompt trimmed to token limit using LangChain's trim_messages."""
     system_content = (
@@ -41,10 +43,14 @@ def _build_prompt_messages(state: AgentState, max_tokens: int = 2000) -> list:
         token_counter=count_tokens_approximately,
         max_tokens=max_tokens,
     )
-    print(f"Prompt token count (approx): {count_tokens_approximately([system_message] + trimmed_history) + count_tokens_approximately([HumanMessage(content=state['user_query'])])}")
+    print(
+        f"Prompt token count (approx): "
+        f"{count_tokens_approximately([system_message] + trimmed_history) + count_tokens_approximately([HumanMessage(content=state['user_query'])])}"
+    )
     return [system_message, *trimmed_history, HumanMessage(content=state["user_query"])]
 
 
+@traceable(name="build_summary_prompt", run_type="prompt")
 def _build_summary_prompt(messages_to_summarize: list) -> list:
     """Build a simple prompt for summarizing old conversation messages (no smart-home context)."""
     system_message = SystemMessage(
@@ -71,6 +77,7 @@ def _fallback_response(state: AgentState, reason: str) -> str:
     )
 
 
+@traceable(name="generate_with_gemini", run_type="llm")
 def generate_with_gemini(state: AgentState = None, is_summary: bool = False, messages_to_summarize: list = None) -> tuple[str, bool]:
     """
     Generate a response with Gemini or summarize messages.
@@ -94,6 +101,8 @@ def generate_with_gemini(state: AgentState = None, is_summary: bool = False, mes
         prompt_messages = _build_summary_prompt(messages_to_summarize)
     else:
         prompt_messages = _build_prompt_messages(state)
+
+    _ = count_tokens_approximately(prompt_messages)
 
     try:
         model = ChatGoogleGenerativeAI(

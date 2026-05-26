@@ -21,6 +21,10 @@ class Settings:
     gemini_api_key: str | None  # will be None if the env var is missing
     # Postgres DSN used by LangGraph PostgresStore for LTM.
     postgres_uri: str | None
+    # LangSmith tracing settings.
+    langsmith_api_key: str | None
+    langsmith_project: str
+    langsmith_tracing_enabled: bool
     # Embedding model used for vectorizing memory content.
     gemini_embedding_model: str
     # Embedding vector dimension; must match the selected model.
@@ -35,6 +39,9 @@ def get_settings() -> Settings:
     return Settings(
         gemini_api_key=os.getenv("GEMINI_API_KEY"),
         postgres_uri=os.getenv("POSTGRES_URI"),
+        langsmith_api_key=os.getenv("LANGSMITH_API_KEY"),
+        langsmith_project=os.getenv("LANGSMITH_PROJECT", "smart-home-langgraph"),
+        langsmith_tracing_enabled=os.getenv("LANGSMITH_TRACING", "false").lower() == "true",
         gemini_embedding_model=os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-2"),
         gemini_embedding_dims=int(os.getenv("GEMINI_EMBEDDING_DIMS", "768")),
     )

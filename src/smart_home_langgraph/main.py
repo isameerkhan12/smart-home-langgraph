@@ -14,6 +14,7 @@ from datetime import datetime
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
+from smart_home_langgraph.config.settings import get_settings
 from smart_home_langgraph.graph.workflow import build_workflow, initial_state
 from smart_home_langgraph.memory.langgraph_store import close_postgres_store, open_postgres_store
 
@@ -38,12 +39,22 @@ class ChatSession:
         self._user_id = "default_user"
 
     def ask(self, query: str) -> tuple[str, int]:
+        settings = get_settings()
         result = self._app.invoke(
             initial_state(
                 query,
                 max_repairs=self._max_repairs,
             ),
-            config={"configurable": {"thread_id": self._thread_id, "user_id": self._user_id}},
+            config={
+                "configurable": {"thread_id": self._thread_id, "user_id": self._user_id},
+                "tags": ["smart-home-agent", "interactive-chat"],
+                "metadata": {
+                    "thread_id": self._thread_id,
+                    "user_id": self._user_id,
+                    "max_repairs": self._max_repairs,
+                    "langsmith_project": settings.langsmith_project,
+                },
+            },
         )
         return result["response"], result["memory_written_count"]
 

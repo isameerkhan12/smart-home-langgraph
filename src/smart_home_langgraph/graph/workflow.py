@@ -9,6 +9,7 @@ from typing import Callable
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
+from langsmith import traceable
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, StateGraph
 from langgraph.store.base import BaseStore
@@ -116,6 +117,7 @@ def build_workflow(
     # Node definitions (closures capture sim, retriever, response_gen, etc.)
     # ------------------------------------------------------------------
 
+    @traceable(name="detect_intent", run_type="chain")
     def detect_intent(state: AgentState) -> AgentState:
         # add an llm here
         """Classify user query into a task class via keyword matching."""
@@ -130,6 +132,7 @@ def build_workflow(
             intent = "general_question"
         return {**state, "intent": intent}
 
+    @traceable(name="retrieve_context", run_type="retriever")
     def retrieve_context(state: AgentState,config: RunnableConfig | None = None,*,store: BaseStore | None = None,) -> AgentState:
         """
         Build two context strings injected into the generation prompt:
@@ -144,11 +147,13 @@ def build_workflow(
             memory_context = format_memories_for_prompt(memories)
         return {**state, "sensor_context": sensor_context, "memory_context": memory_context}
 
+    @traceable(name="generate_response", run_type="chain")
     def generate_response(state: AgentState) -> AgentState:
         """Call Gemini (or injected fake) to produce the initial response."""
         response_text, used_live_llm = response_gen(state)
         return {**state, "response": response_text, "used_live_llm": used_live_llm}
 
+    @traceable(name="record_turn", run_type="chain")
     def record_turn(state: AgentState) -> AgentState:
         """Append the completed user/assistant turn to chat history."""
         return {
@@ -165,6 +170,7 @@ def build_workflow(
             return "summarize"
         return "continue"
 
+    @traceable(name="summarize_history", run_type="chain")
     def summarize_node(state: AgentState) -> AgentState:
         """
         Summarize older messages to keep context window manageable.
@@ -200,11 +206,13 @@ def build_workflow(
         
         return state
 
+    @traceable(name="critique_node", run_type="chain")
     def critique_node(state: AgentState) -> AgentState:
         """Evaluate response quality; store structured result for routing."""
         result = critique_gen(state)
         return {**state, "critique_result": result}
 
+    @traceable(name="repair_response", run_type="chain")
     def repair_node(state: AgentState) -> AgentState:
         """
         Regenerate the response using critique hints.
@@ -225,6 +233,7 @@ def build_workflow(
             "repair_count": state["repair_count"] + 1,
         }
 
+    @traceable(name="memory_writer", run_type="chain")
     def memory_writer_node(state: AgentState,config: RunnableConfig | None = None,*,store: BaseStore | None = None,) -> AgentState:
         """
         Write typed long-term memories to the LangGraph store.
@@ -308,9 +317,7 @@ def build_workflow(
 
     graph.set_entry_point("detect_intent")
     graph.add_edge("detect_intent", "retrieve_context")
-    graph.add_edge("retrieve_context", "generate_response")
-    
-    # Check if summarization is needed after retrieve_context
+
     graph.add_conditional_edges(
         "retrieve_context",
         should_summarize,

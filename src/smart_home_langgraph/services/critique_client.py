@@ -12,6 +12,7 @@ import json
 import re
 
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langsmith import traceable
 
 from smart_home_langgraph.config.settings import get_settings
 from smart_home_langgraph.graph.state import AgentState, CritiqueResult
@@ -33,6 +34,7 @@ def _parse_critique_json(text: str) -> dict:
     return json.loads(text)
 
 
+@traceable(name="critique_response", run_type="llm")
 def critique_response(state: AgentState) -> CritiqueResult:
     """
     Evaluate response quality.
