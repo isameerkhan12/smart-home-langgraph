@@ -53,7 +53,7 @@ GEMINI_EMBEDDING_DIMS=768
 Notes:
 
 - If GEMINI_API_KEY is missing, the app still runs with fallback generation.
-- If POSTGRES_URI or GEMINI_API_KEY is missing, long-term memory store is disabled.
+- POSTGRES_URI is required in V1 because telemetry context is now read from Postgres structured store.
 
 ## 6) Run interactive chat
 
@@ -71,7 +71,7 @@ Useful commands inside chat:
 ## 7) What happens after run
 
 - The app detects intent from your query.
-- It reads sensor context from src/smart_home_langgraph/data/home_data.xlsx.
+- It reads telemetry context from Postgres (table telemetry_events), bootstrapped from src/smart_home_langgraph/data/preprocessed_dataset.csv.
 - It loads per-thread short-term state from local SQLite (smart_home_agent.db).
 - If configured, it retrieves long-term memory from Postgres (pgvector-backed).
 - It generates a response (Gemini or fallback).

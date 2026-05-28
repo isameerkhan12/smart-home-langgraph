@@ -56,7 +56,7 @@ class AgentState(TypedDict):
     intent: str
 
     # ---- Context (populated by retrieve_context node) ----------------------
-    # Short text summary of recent sensor data from the time-series simulator.
+    # Short text summary of recent telemetry data from structured store.
     sensor_context: str
 
     # Long-term memory context assembled from mistakes, recipes, preferences.

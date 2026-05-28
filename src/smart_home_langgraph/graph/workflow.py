@@ -83,8 +83,8 @@ def build_workflow(
                           Default: generate_with_gemini (real Gemini call).
       critique_generator  Callable that returns a CritiqueResult dict.
                           Default: critique_response (real Gemini critique).
-      loader              HomeDataLoader that reads sensor data from Excel.
-                            Default: reads data/home_data.xlsx.
+    loader              HomeDataLoader that serves telemetry summaries
+                  backed by Postgres structured store.
       checkpointer        LangGraph checkpointer for persistent chat state.
                             Default: no checkpointing.
       store               LangGraph BaseStore for long-term memory.
@@ -136,7 +136,7 @@ def build_workflow(
     def retrieve_context(state: AgentState,config: RunnableConfig | None = None,*,store: BaseStore | None = None,) -> AgentState:
         """
         Build two context strings injected into the generation prompt:
-          1. sensor_context  — recent 24h sensor summary from the simulator
+          1. sensor_context  — recent telemetry summary from structured store
           2. memory_context  — mistakes + recipes + preferences from memory stores
         """
         sensor_context = data_loader.context_window(hours=24)
