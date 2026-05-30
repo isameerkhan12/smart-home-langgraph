@@ -1,15 +1,16 @@
 # ---------------------------------------------------------------------------
 # services/memory_extractor.py
-# Purpose: Native LTM extraction using Gemini structured output.
+# Purpose: Native LTM extraction using the configured LLM provider.
 # ---------------------------------------------------------------------------
 from __future__ import annotations
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langsmith import traceable
 
 from smart_home_langgraph.config.settings import get_settings
 from smart_home_langgraph.memory.ltm_schema import MemoryDecision
+from smart_home_langgraph.services.json_utils import result_to_model
+from smart_home_langgraph.services.model_factory import build_model
 
 
 MEMORY_EXTRACTION_PROMPT = """You extract long-term memories from a smart-home assistant turn.
@@ -21,6 +22,39 @@ Rules:
 - Set is_new=false if a memory already exists with the same meaning.
 - Avoid duplicates and avoid speculative facts.
 """
+
+OLLAMA_FALLBACK_JSON_INSTRUCTION = (
+    "\nReturn valid JSON matching this schema: "
+    '{"should_write": true/false, "memories": [{"text": "...", "memory_type": "preference|recipe|mistake|general", "is_new": true/false, "metadata": {}}]}'
+)
+
+
+def _build_system_prompt(provider: str) -> str:
+    """Build extraction prompt and include Ollama JSON hint only when needed."""
+    if provider == "ollama":
+        return MEMORY_EXTRACTION_PROMPT + OLLAMA_FALLBACK_JSON_INSTRUCTION
+    return MEMORY_EXTRACTION_PROMPT
+
+
+def _invoke_ollama_fallback(settings, user_payload: str) -> MemoryDecision | None:
+    """Fallback for Ollama models that ignore structured output."""
+    try:
+        from langchain_ollama import ChatOllama
+
+        fallback_model = ChatOllama(
+            model=settings.ollama_model,
+            base_url=settings.ollama_base_url,
+            temperature=0,
+        )
+        fallback_result = fallback_model.invoke(
+            [
+                SystemMessage(content=MEMORY_EXTRACTION_PROMPT + OLLAMA_FALLBACK_JSON_INSTRUCTION),
+                HumanMessage(content=user_payload),
+            ]
+        )
+        return result_to_model(fallback_result, MemoryDecision)
+    except Exception:
+        return None
 
 
 @traceable(name="extract_structured_memories", run_type="llm")
@@ -35,14 +69,15 @@ def extract_structured_memories(
 ) -> MemoryDecision:
     """Extract typed memory candidates from the current interaction."""
     settings = get_settings()
-    if not settings.gemini_api_key:
+    provider = settings.llm_provider.lower()
+    if provider == "gemini" and not settings.gemini_api_key:
         return MemoryDecision(should_write=False, memories=[])
 
-    model = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        google_api_key=settings.gemini_api_key,
+    model = build_model(
+        settings,
         temperature=0,
-    ).with_structured_output(MemoryDecision)
+        structured_output_schema=MemoryDecision,
+    )
 
     user_payload = (
         f"Intent: {intent}\n"
@@ -53,12 +88,24 @@ def extract_structured_memories(
         f"Existing memories:\n{existing_memories_text}\n"
     )
 
+    system_prompt = _build_system_prompt(provider)
+
     try:
-        return model.invoke(
+        result = model.invoke(
             [
-                SystemMessage(content=MEMORY_EXTRACTION_PROMPT),
+                SystemMessage(content=system_prompt),
                 HumanMessage(content=user_payload),
             ]
         )
+        return result_to_model(result, MemoryDecision)
     except Exception:
+        pass
+
+    if provider != "ollama":
         return MemoryDecision(should_write=False, memories=[])
+
+    fallback_decision = _invoke_ollama_fallback(settings, user_payload)
+    if fallback_decision is not None:
+        return fallback_decision
+
+    return MemoryDecision(should_write=False, memories=[])

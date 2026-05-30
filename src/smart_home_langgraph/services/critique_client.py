@@ -8,30 +8,13 @@
 # ---------------------------------------------------------------------------
 from __future__ import annotations
 
-import json
-import re
-
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langsmith import traceable
 
 from smart_home_langgraph.config.settings import get_settings
 from smart_home_langgraph.graph.state import AgentState, CritiqueResult
-
-
-def _parse_critique_json(text: str) -> dict:
-    """
-    Extract JSON from LLM response.
-
-    The LLM may return markdown-wrapped JSON or raw JSON.
-    This function tries to extract and parse it.
-    """
-    # Try to find JSON block wrapped in markdown code blocks.
-    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if match:
-        return json.loads(match.group(1))
-
-    # Try raw JSON parsing.
-    return json.loads(text)
+from smart_home_langgraph.services.json_utils import result_to_model
+from smart_home_langgraph.services.llm_schema import CritiqueDecision
+from smart_home_langgraph.services.model_factory import build_model
 
 
 @traceable(name="critique_response", run_type="llm")
@@ -46,7 +29,7 @@ def critique_response(state: AgentState) -> CritiqueResult:
       CritiqueResult dict with passed, issues, severity, repair_hints.
     """
     settings = get_settings()
-    if not settings.gemini_api_key:
+    if settings.llm_provider.lower() == "gemini" and not settings.gemini_api_key:
         # If no key, assume response is acceptable (safe fallback).
         return {
             "passed": True,
@@ -74,28 +57,13 @@ def critique_response(state: AgentState) -> CritiqueResult:
     )
 
     try:
-        model = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=settings.gemini_api_key,
+        model = build_model(
+            settings,
             temperature=0.3,
+            structured_output_schema=CritiqueDecision,
         )
         result = model.invoke(prompt)
-
-        # Extract and parse JSON from response.
-        if isinstance(result.content, str):
-            text = result.content
-        else:
-            text = str(result.content)
-
-        critique_dict = _parse_critique_json(text)
-
-        # Validate and normalize the response.
-        return {
-            "passed": critique_dict.get("passed", True),
-            "issues": critique_dict.get("issues", []),
-            "severity": critique_dict.get("severity", "low"),
-            "repair_hints": critique_dict.get("repair_hints", ""),
-        }
+        return result_to_model(result, CritiqueDecision).model_dump()
     except Exception as exc:  # noqa: BLE001 - robust fallback on any error
         # If critique fails, assume response is acceptable (safe fallback).
         return {

@@ -19,6 +19,11 @@ from dotenv import load_dotenv     # reads the .env file and loads each line as 
 @dataclass(frozen=True)
 class Settings:
     gemini_api_key: str | None  # will be None if the env var is missing
+    # Which LLM provider to use for generation/critique/memory extraction.
+    llm_provider: str
+    # Ollama settings used when LLM_PROVIDER=ollama.
+    ollama_model: str
+    ollama_base_url: str
     # Postgres DSN used by LangGraph PostgresStore for LTM.
     postgres_uri: str | None
     # LangSmith tracing settings.
@@ -38,6 +43,9 @@ def get_settings() -> Settings:
     load_dotenv()
     return Settings(
         gemini_api_key=os.getenv("GEMINI_API_KEY"),
+        llm_provider=os.getenv("LLM_PROVIDER", "gemini").strip().lower(),
+        ollama_model=os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
+        ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         postgres_uri=os.getenv("POSTGRES_URI"),
         langsmith_api_key=os.getenv("LANGSMITH_API_KEY"),
         langsmith_project=os.getenv("LANGSMITH_PROJECT", "smart-home-langgraph"),

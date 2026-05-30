@@ -19,7 +19,8 @@ from smart_home_langgraph.evaluation.metrics import EpisodeRecord
 from smart_home_langgraph.graph.state import AgentState, CritiqueResult
 from smart_home_langgraph.memory.ltm_schema import MemoryType
 from smart_home_langgraph.services.critique_client import critique_response
-from smart_home_langgraph.services.gemini_client import generate_with_gemini
+from smart_home_langgraph.services.response_client import generate_response
+from smart_home_langgraph.services.summary_client import summarize_messages
 from smart_home_langgraph.services.memory_extractor import extract_structured_memories
 
 # Type aliases for injectable callables (used for dependency injection in tests).
@@ -80,7 +81,7 @@ def build_workflow(
 
     Parameters (all optional — defaults wire up the live system):
       response_generator  Callable that produces (response_text, used_live_llm).
-                          Default: generate_with_gemini (real Gemini call).
+                                                    Default: generate_response (real provider call).
       critique_generator  Callable that returns a CritiqueResult dict.
                           Default: critique_response (real Gemini critique).
     loader              HomeDataLoader that serves telemetry summaries
@@ -92,7 +93,7 @@ def build_workflow(
       max_repairs         Maximum repair loop iterations. Default: 2.
     """
     data_loader = loader or HomeDataLoader()
-    response_gen = response_generator or generate_with_gemini
+    response_gen = response_generator or generate_response
     critique_gen = critique_generator or critique_response
 
     # Memory namespace layout: (app, entity, user_id, collection)
@@ -148,8 +149,8 @@ def build_workflow(
         return {**state, "sensor_context": sensor_context, "memory_context": memory_context}
 
     @traceable(name="generate_response", run_type="chain")
-    def generate_response(state: AgentState) -> AgentState:
-        """Call Gemini (or injected fake) to produce the initial response."""
+    def generate_response_node(state: AgentState) -> AgentState:
+        """Call response generator (or injected fake) to produce the initial response."""
         response_text, used_live_llm = response_gen(state)
         return {**state, "response": response_text, "used_live_llm": used_live_llm}
 
@@ -183,8 +184,7 @@ def build_workflow(
             msgs_to_summarize = history[:-2]
             last_2_msgs = history[-2:]
             
-            # Call generate_with_gemini with is_summary flag (uses _build_summary_prompt, no smart-home context pollution)
-            summary_content, _ = generate_with_gemini(is_summary=True, messages_to_summarize=msgs_to_summarize)
+            summary_content, _ = summarize_messages(msgs_to_summarize)
             
             # Create summary message and remove old ones
             summary_msg = SystemMessage(
@@ -309,7 +309,7 @@ def build_workflow(
     graph.add_node("detect_intent", detect_intent)
     graph.add_node("retrieve_context", retrieve_context)
     graph.add_node("summarize", summarize_node)
-    graph.add_node("generate_response", generate_response)
+    graph.add_node("generate_response", generate_response_node)
     graph.add_node("critique_response", critique_node)
     graph.add_node("repair_response", repair_node)
     graph.add_node("record_turn", record_turn)

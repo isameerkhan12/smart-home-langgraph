@@ -67,6 +67,7 @@ class AgentState(TypedDict):
     response: str
 
     # True when Gemini API was called successfully; False when fallback was used.
+    # True when a live LLM was called successfully; False when fallback was used.
     used_live_llm: bool
 
     # ---- Critique + repair loop --------------------------------------------

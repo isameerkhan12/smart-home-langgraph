@@ -40,15 +40,19 @@ class ChatSession:
 
     def ask(self, query: str) -> tuple[str, int]:
         settings = get_settings()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        run_name = f"chat:{self._thread_id}:{timestamp}"
         result = self._app.invoke(
             initial_state(
                 query,
                 max_repairs=self._max_repairs,
             ),
             config={
+                "run_name": run_name,
                 "configurable": {"thread_id": self._thread_id, "user_id": self._user_id},
                 "tags": ["smart-home-agent", "interactive-chat"],
                 "metadata": {
+                    "chat_name": run_name,
                     "thread_id": self._thread_id,
                     "user_id": self._user_id,
                     "max_repairs": self._max_repairs,

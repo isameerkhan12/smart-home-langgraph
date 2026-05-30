@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smart-home-langgraph"
+version = "0.1.0"
+description = "Smart home assistant workflow using LangGraph"
+readme = "README.md"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["smart_home_langgraph*"]
+namespaces = true
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}

@@ -1,20 +1,27 @@
 # ---------------------------------------------------------------------------
-# services/gemini_client.py
+# services/response_client.py
 #
 # Purpose:
-#   Build the final generation prompt and call Gemini to produce a response.
-#   If Gemini is unavailable (missing key, network issue, API error), return
-#   a deterministic fallback so the workflow still completes safely.
+#   Build the final generation prompt and call the configured LLM provider to
+#   produce a response. If the live provider is unavailable (missing key,
+#   network issue, API error), return a deterministic fallback so the workflow
+#   still completes safely.
 # ---------------------------------------------------------------------------
 from __future__ import annotations
 
 from langchain_core.messages import HumanMessage, SystemMessage, trim_messages
 from langchain_core.messages.utils import count_tokens_approximately
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langsmith import traceable
 
 from smart_home_langgraph.config.settings import get_settings
 from smart_home_langgraph.graph.state import AgentState
+from smart_home_langgraph.services.json_utils import result_to_text
+from smart_home_langgraph.services.model_factory import build_model
+
+
+def _requires_provider_api_key(settings) -> bool:
+    """Return True only when current provider requires an API key."""
+    return settings.llm_provider.lower() == "gemini"
 
 
 @traceable(name="build_generation_prompt", run_type="prompt")
@@ -32,9 +39,9 @@ def _build_prompt_messages(state: AgentState, max_tokens: int = 2000) -> list:
     # Include summary if it exists (from previous message summarization)
     if state.get("summary"):
         system_content += f"[CONVERSATION SUMMARY]\n{state['summary']}\n\n"
-    
+
     system_content += "Return a concise actionable answer in 4-6 bullet points."
-    
+
     system_message = SystemMessage(content=system_content)
     # Trim conversation history to fit within token budget, keeping the most recent messages.
     trimmed_history = trim_messages(
@@ -50,76 +57,42 @@ def _build_prompt_messages(state: AgentState, max_tokens: int = 2000) -> list:
     return [system_message, *trimmed_history, HumanMessage(content=state["user_query"])]
 
 
-@traceable(name="build_summary_prompt", run_type="prompt")
-def _build_summary_prompt(messages_to_summarize: list) -> list:
-    """Build a simple prompt for summarizing old conversation messages (no smart-home context)."""
-    system_message = SystemMessage(
-        content=(
-            "You are a conversation summarizer. "
-            "Concisely summarize the following messages, preserving key decisions and context. "
-            "Be factual and avoid opinions."
-        )
-    )
-    # Build a simple text representation of messages to summarize
-    messages_text = "\n".join(
-        [f"{getattr(m, 'type', 'unknown')}: {m.content}" for m in messages_to_summarize]
-    )
-    return [system_message, HumanMessage(content=messages_text)]
-
-
 def _fallback_response(state: AgentState, reason: str) -> str:
     """Return a deterministic fallback response when live LLM call is unavailable."""
     return (
-        "[Phase 3 fallback: live Gemini call not used] "
+        "[Phase 3 fallback: live LLM call not used] "
         f"Reason: {reason}. "
         f"Intent detected: {state['intent']}. "
         "Use sensor and memory context to produce a practical next step."
     )
 
 
-@traceable(name="generate_with_gemini", run_type="llm")
-def generate_with_gemini(state: AgentState = None, is_summary: bool = False, messages_to_summarize: list = None) -> tuple[str, bool]:
+@traceable(name="generate_response", run_type="llm")
+def generate_response(
+    state: AgentState,
+) -> tuple[str, bool]:
     """
-    Generate a response with Gemini or summarize messages.
-    
+    Generate a response with the configured provider.
+
     Args:
-        state: AgentState for normal generation (ignored if is_summary=True)
-        is_summary: If True, summarize messages_to_summarize instead of generating response
-        messages_to_summarize: List of messages to summarize (only used if is_summary=True)
+        state: AgentState used for generation.
 
     Returns:
       (response_text, used_live_llm)
     """
     settings = get_settings()
-    if not settings.gemini_api_key:
-        if is_summary:
-            return "[Summarization skipped: missing GEMINI_API_KEY]", False
+    if _requires_provider_api_key(settings) and not settings.gemini_api_key:
         return _fallback_response(state, "missing GEMINI_API_KEY"), False
 
-    # Choose prompt builder based on task
-    if is_summary:
-        prompt_messages = _build_summary_prompt(messages_to_summarize)
-    else:
-        prompt_messages = _build_prompt_messages(state)
+    prompt_messages = _build_prompt_messages(state)
 
     _ = count_tokens_approximately(prompt_messages)
 
     try:
-        model = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=settings.gemini_api_key,
-            temperature=0.2,
-        )
+        model = build_model(settings, temperature=0.2)
         result = model.invoke(prompt_messages)
-
-        # LangChain model outputs can be either plain text or structured content.
-        if isinstance(result.content, str):
-            text = result.content
-        else:
-            text = str(result.content)
-
+        text = result_to_text(result)
         return text.strip(), True
     except Exception as exc:  # noqa: BLE001 - we want robust fallback for all runtime failures
-        if is_summary:
-            return f"[Summarization error: {exc}]", False
-        return _fallback_response(state, f"Gemini error: {exc}"), False
+        return _fallback_response(state, f"{settings.llm_provider} error: {exc}"), False
+

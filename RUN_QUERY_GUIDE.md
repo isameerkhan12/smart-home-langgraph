@@ -19,6 +19,7 @@ If you have not installed dependencies yet:
 ```powershell
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+python -m pip install -e .
 ```
 
 ## 3) Start Postgres with Docker
@@ -32,11 +33,13 @@ docker compose ps
 
 The included compose file maps container port 5432 to host port 5442.
 
-## 4) Set environment variable for imports
+## 4) (Optional fallback) Set PYTHONPATH for imports
 
 ```powershell
 $env:PYTHONPATH = "src"
 ```
+
+You only need this fallback if you skip `pip install -e .`.
 
 ## 5) Add environment variables (one-time setup)
 
@@ -83,7 +86,6 @@ Useful commands inside chat:
 Run tests:
 
 ```powershell
-$env:PYTHONPATH = "src"
 python -m pytest tests -v
 ```
 
