@@ -10,6 +10,7 @@
 #   - Query + intent:    what the user asked and how we classified it
 #   - Context:           sensor summary + long-term memory retrieved for this run
 #   - Response:          the final answer and whether it came from a live LLM call
+#   - Tools:             tool execution state and results
 #   - Critique + repair: structured quality evaluation and self-repair tracking
 #   - Learning metrics:  episode outcome recorded for trend analysis
 # ---------------------------------------------------------------------------
@@ -21,6 +22,25 @@ from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
 from smart_home_langgraph.evaluation.metrics import EpisodeRecord
+
+
+class ToolExecutionResult(TypedDict):
+    """Result from a tool execution."""
+    
+    # Name of the tool that was executed.
+    tool_name: str
+    
+    # Input that was passed to the tool.
+    tool_input: str
+    
+    # Output returned by the tool.
+    tool_output: str
+    
+    # Whether the execution succeeded.
+    success: bool
+    
+    # Error message if execution failed.
+    error: str
 
 
 class CritiqueResult(TypedDict):
@@ -47,7 +67,8 @@ class AgentState(TypedDict):
     user_query: str
 
     # Conversation messages merged with LangGraph's message-aware reducer.
-    conversation_history: Annotated[list[BaseMessage], add_messages]
+    # Named "messages" for compatibility with LangGraph's tools_condition.
+    messages: Annotated[list[BaseMessage], add_messages]
 
     # Summary of earlier messages kept separate to avoid losing context.
     summary: str
@@ -66,9 +87,18 @@ class AgentState(TypedDict):
     # The final answer to return to the user. May be regenerated on repair.
     response: str
 
-    # True when Gemini API was called successfully; False when fallback was used.
     # True when a live LLM was called successfully; False when fallback was used.
     used_live_llm: bool
+
+    # ---- Tool execution state ----------------------------------------------
+    # The last tool execution result (if any).
+    tool_result: ToolExecutionResult | None
+
+    # Generated code from the LLM (for code execution tools).
+    generated_code: str
+
+    # Number of tool execution attempts for this query.
+    tool_execution_count: int
 
     # ---- Critique + repair loop --------------------------------------------
     # Structured quality feedback from the critique node.

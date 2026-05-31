@@ -13,13 +13,28 @@ def build_model(
     structured_output_schema: Any | None = None,
 ):
     """Build configured provider model, optionally attaching structured output schema."""
-    if settings.llm_provider.lower() == "ollama":
+    provider = settings.llm_provider.lower()
+    
+    if provider == "ollama":
         from langchain_ollama import ChatOllama
 
         model = ChatOllama(
             model=settings.ollama_model,
             base_url=settings.ollama_base_url,
             temperature=temperature,
+        )
+    elif provider == "openrouter":
+        from langchain_openai import ChatOpenAI
+
+        model = ChatOpenAI(
+            model=settings.openrouter_model,
+            openai_api_key=settings.openrouter_api_key,
+            openai_api_base="https://openrouter.ai/api/v1",
+            temperature=temperature,
+            default_headers={
+                "HTTP-Referer": "https://github.com/smart-home-langgraph",
+                "X-Title": "Smart Home LangGraph",
+            },
         )
     else:
         from langchain_google_genai import ChatGoogleGenerativeAI

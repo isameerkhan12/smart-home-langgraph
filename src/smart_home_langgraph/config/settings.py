@@ -24,6 +24,9 @@ class Settings:
     # Ollama settings used when LLM_PROVIDER=ollama.
     ollama_model: str
     ollama_base_url: str
+    # OpenRouter settings used when LLM_PROVIDER=openrouter.
+    openrouter_api_key: str | None
+    openrouter_model: str
     # Postgres DSN used by LangGraph PostgresStore for LTM.
     postgres_uri: str | None
     # LangSmith tracing settings.
@@ -46,6 +49,8 @@ def get_settings() -> Settings:
         llm_provider=os.getenv("LLM_PROVIDER", "gemini").strip().lower(),
         ollama_model=os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
+        openrouter_model=os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.2-3b-instruct:free"),
         postgres_uri=os.getenv("POSTGRES_URI"),
         langsmith_api_key=os.getenv("LANGSMITH_API_KEY"),
         langsmith_project=os.getenv("LANGSMITH_PROJECT", "smart-home-langgraph"),

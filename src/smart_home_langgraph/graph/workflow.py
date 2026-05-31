@@ -5,33 +5,44 @@
 #   never touch external APIs.
 # ---------------------------------------------------------------------------------
 import uuid
-from typing import Callable
+from typing import Callable, Literal, Sequence
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    RemoveMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool
 from langsmith import traceable
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, StateGraph
+from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.store.base import BaseStore
 
 from smart_home_langgraph.data.loader import HomeDataLoader
 from smart_home_langgraph.evaluation.metrics import EpisodeRecord
-from smart_home_langgraph.graph.state import AgentState, CritiqueResult
+from smart_home_langgraph.graph.state import AgentState, CritiqueResult, ToolExecutionResult
 from smart_home_langgraph.memory.ltm_schema import MemoryType
 from smart_home_langgraph.services.critique_client import critique_response
-from smart_home_langgraph.services.response_client import generate_response
+from smart_home_langgraph.services.response_client import generate_response, generate_response_with_tools
 from smart_home_langgraph.services.summary_client import summarize_messages
 from smart_home_langgraph.services.memory_extractor import extract_structured_memories
+from smart_home_langgraph.tools.python_executor import get_smart_home_tools
 
 # Type aliases for injectable callables (used for dependency injection in tests).
 ResponseGenerator = Callable[[AgentState], tuple[str, bool]]
+ResponseGeneratorWithTools = Callable[[AgentState, Sequence[BaseTool]], AIMessage]
 CritiqueGenerator = Callable[[AgentState], CritiqueResult]
 
 
 def initial_state(
     query: str,
     max_repairs: int = 2,
-    conversation_history: list[BaseMessage] | None = None,
+    messages: list[BaseMessage] | None = None,
 ) -> AgentState:
     """
     Return the default initial state for starting a new agent run.
@@ -40,13 +51,18 @@ def initial_state(
     """
     return {
         "user_query": query,
-        "conversation_history": list(conversation_history or []),
+        "messages": list(messages or []),
         "summary": "",
         "intent": "",
         "sensor_context": "",
         "memory_context": "",
         "response": "",
         "used_live_llm": False,
+        # Tool execution state
+        "tool_result": None,
+        "generated_code": "",
+        "tool_execution_count": 0,
+        # Critique and repair
         "critique_result": {
             "passed": False,
             "issues": [],
@@ -75,26 +91,32 @@ def build_workflow(
     # Native LangGraph long-term store (e.g., PostgresStore).
     store: BaseStore | None = None,
     max_repairs: int = 2,
+    tools: Sequence[BaseTool] | None = None,
 ):
     """
     Build and compile the smart-home agent graph.
 
     Parameters (all optional — defaults wire up the live system):
       response_generator  Callable that produces (response_text, used_live_llm).
-                                                    Default: generate_response (real provider call).
+                          Default: generate_response (real provider call).
       critique_generator  Callable that returns a CritiqueResult dict.
                           Default: critique_response (real Gemini critique).
-    loader              HomeDataLoader that serves telemetry summaries
-                  backed by Postgres structured store.
+      loader              HomeDataLoader that serves telemetry summaries
+                          backed by Postgres structured store.
       checkpointer        LangGraph checkpointer for persistent chat state.
-                            Default: no checkpointing.
+                          Default: no checkpointing.
       store               LangGraph BaseStore for long-term memory.
-                            Default: no persistent store.
+                          Default: no persistent store.
       max_repairs         Maximum repair loop iterations. Default: 2.
+      tools               List of tools for code execution. Default: smart home tools.
     """
     data_loader = loader or HomeDataLoader()
     response_gen = response_generator or generate_response
     critique_gen = critique_generator or critique_response
+    
+    # Initialize tools for data analysis
+    available_tools = list(tools) if tools else get_smart_home_tools()
+    tool_node = ToolNode(tools=available_tools)
 
     # Memory namespace layout: (app, entity, user_id, collection)
     namespace_root = ("smart_home", "users")
@@ -120,9 +142,9 @@ def build_workflow(
 
     @traceable(name="detect_intent", run_type="chain")
     def detect_intent(state: AgentState) -> AgentState:
-        # add an llm here
         """Classify user query into a task class via keyword matching."""
         query = state["user_query"].lower()
+        
         if any(word in query for word in ["energy", "power", "bill", "save"]):
             intent = "energy_optimization"
         elif any(word in query for word in ["temperature", "comfort", "hot", "cold"]):
@@ -131,6 +153,7 @@ def build_workflow(
             intent = "anomaly_explanation"
         else:
             intent = "general_question"
+        
         return {**state, "intent": intent}
 
     @traceable(name="retrieve_context", run_type="retriever")
@@ -150,16 +173,111 @@ def build_workflow(
 
     @traceable(name="generate_response", run_type="chain")
     def generate_response_node(state: AgentState) -> AgentState:
-        """Call response generator (or injected fake) to produce the initial response."""
-        response_text, used_live_llm = response_gen(state)
-        return {**state, "response": response_text, "used_live_llm": used_live_llm}
+        """
+        Generate response using the configured LLM.
+        
+        When tools are available, uses bind_tools and lets the LLM
+        autonomously decide whether to call tools or respond directly.
+        """
+        if available_tools:
+            # LLM with tools bound - it decides autonomously whether to use them
+            llm_response = generate_response_with_tools(state, available_tools)
+            
+            if llm_response.tool_calls:
+                # LLM chose to use a tool
+                # PythonAstREPLTool uses 'query' as the argument name for code
+                tool_args = llm_response.tool_calls[0].get("args", {})
+                code = tool_args.get("query") or tool_args.get("code", "")
+                return {
+                    **state,
+                    "messages": [llm_response],
+                    "used_live_llm": True,
+                    "generated_code": code,
+                }
+            else:
+                # LLM chose to respond directly (no tools needed)
+                # Still add AIMessage to messages so tools_condition can route correctly
+                return {
+                    **state,
+                    "messages": [llm_response],
+                    "response": llm_response.content or "",
+                    "used_live_llm": True,
+                }
+        else:
+            # No tools available - standard generation
+            response_text, used_live_llm = response_gen(state)
+            return {**state, "response": response_text, "used_live_llm": used_live_llm}
+
+    @traceable(name="process_tool_result", run_type="chain")
+    def process_tool_result(state: AgentState) -> AgentState:
+        """
+        Process results from any tool execution and format the response.
+        
+        Handles different tool types via format templates.
+        """
+        messages = state.get("messages", [])
+        
+        # Find the last tool message
+        tool_output = ""
+        tool_name = ""
+        
+        for msg in reversed(messages):
+            if isinstance(msg, ToolMessage):
+                tool_output = msg.content if isinstance(msg.content, str) else str(msg.content)
+                tool_name = getattr(msg, "name", "unknown_tool")
+                break
+        
+        # Get generated code from state (set by generate_response_node)
+        code = state.get("generated_code", "")
+        
+        # Detect errors (common patterns across tools)
+        error_patterns = ["Error:", "Exception", "Traceback", "failed", "error:"]
+        success = not any(pattern.lower() in tool_output.lower() for pattern in error_patterns)
+        error = tool_output if not success else ""
+        
+        # Build the tool execution result
+        tool_result: ToolExecutionResult = {
+            "tool_name": tool_name,
+            "tool_input": code,
+            "tool_output": tool_output,
+            "success": success,
+            "error": error,
+        }
+        
+        # Build response based on tool type
+        if tool_name == "python_repl":
+            if success:
+                response = (
+                    f"Based on my analysis of the smart home data:\n\n"
+                    f"**Result:**\n{tool_output}\n\n"
+                    f"This was calculated by executing:\n```python\n{code}\n```"
+                )
+            else:
+                response = (
+                    f"I attempted to analyze the data but encountered an error:\n\n"
+                    f"**Error:**\n{tool_output}\n\n"
+                    f"Let me try a different approach."
+                )
+        else:
+            # Default generic formatter
+            if success:
+                response = f"**{tool_name} Result:**\n{tool_output}"
+            else:
+                response = f"**{tool_name} Error:**\n{tool_output}"
+        
+        return {
+            **state,
+            "response": response,
+            "tool_result": tool_result,
+            "tool_execution_count": state.get("tool_execution_count", 0) + 1,
+        }
 
     @traceable(name="record_turn", run_type="chain")
     def record_turn(state: AgentState) -> AgentState:
         """Append the completed user/assistant turn to chat history."""
         return {
             **state,
-            "conversation_history": [
+            "messages": [
                 HumanMessage(content=state["user_query"]),
                 AIMessage(content=state["response"]),
             ],
@@ -167,7 +285,7 @@ def build_workflow(
 
     def should_summarize(state: AgentState) -> str:
         """Route to summarize_node if conversation > 6 messages, else continue to generate."""
-        if len(state["conversation_history"]) > 6:
+        if len(state["messages"]) > 6:
             return "summarize"
         return "continue"
 
@@ -177,7 +295,7 @@ def build_workflow(
         Summarize older messages to keep context window manageable.
         Keeps last 2 messages, summarizes the rest, removes originals using RemoveMessage.
         """
-        history = state["conversation_history"]
+        history = state["messages"]
         
         if len(history) > 6:
             # Keep last 2 messages, summarize everything else
@@ -200,7 +318,7 @@ def build_workflow(
             
             return {
                 **state,
-                "conversation_history": remove_messages + [summary_msg] + last_2_msgs,
+                "messages": remove_messages + [summary_msg] + last_2_msgs,
                 "summary": summary_content,
             }
         
@@ -216,22 +334,63 @@ def build_workflow(
     def repair_node(state: AgentState) -> AgentState:
         """
         Regenerate the response using critique hints.
+        
+        For tool-based queries, this includes code repair hints.
         Appends repair instructions to the original query so the generator
         knows what to fix. Increments repair_count for loop termination.
         """
-        hints = (
-            f"\n\nPrevious response had issues. Repair hints: {state['critique_result']['repair_hints']}\n"
-            f"Issues identified: {', '.join(state['critique_result']['issues'])}\n"
-            "Please provide an improved response."
-        )
+        tool_result = state.get("tool_result")
+        
+        # Build repair hints based on whether this was a tool execution
+        if tool_result and not tool_result.get("success"):
+            hints = (
+                f"\n\nPrevious code execution failed.\n"
+                f"Error: {tool_result.get('error', 'Unknown error')}\n"
+                f"Failed code:\n```python\n{tool_result.get('tool_input', '')}\n```\n"
+                f"Critique hints: {state['critique_result']['repair_hints']}\n"
+                f"Please generate corrected Python code to answer the question."
+            )
+        else:
+            hints = (
+                f"\n\nPrevious response had issues. Repair hints: {state['critique_result']['repair_hints']}\n"
+                f"Issues identified: {', '.join(state['critique_result']['issues'])}\n"
+                "Please provide an improved response."
+            )
+        
         repair_state = {**state, "user_query": state["user_query"] + hints}
-        response_text, used_live_llm = response_gen(repair_state)
-        return {
-            **state,
-            "response": response_text,
-            "used_live_llm": used_live_llm or state["used_live_llm"],
-            "repair_count": state["repair_count"] + 1,
-        }
+        
+        # Regenerate with tools if available (LLM decides autonomously)
+        if available_tools:
+            llm_response = generate_response_with_tools(repair_state, available_tools)
+            
+            if llm_response.tool_calls:
+                # PythonAstREPLTool uses 'query' as the argument name for code
+                tool_args = llm_response.tool_calls[0].get("args", {})
+                code = tool_args.get("query") or tool_args.get("code", "")
+                return {
+                    **state,
+                    "messages": [llm_response],
+                    "used_live_llm": True,
+                    "generated_code": code,
+                    "repair_count": state["repair_count"] + 1,
+                }
+            else:
+                # Still add AIMessage to messages so tools_condition can route correctly
+                return {
+                    **state,
+                    "messages": [llm_response],
+                    "response": llm_response.content or "",
+                    "used_live_llm": True,
+                    "repair_count": state["repair_count"] + 1,
+                }
+        else:
+            response_text, used_live_llm = response_gen(repair_state)
+            return {
+                **state,
+                "response": response_text,
+                "used_live_llm": used_live_llm or state["used_live_llm"],
+                "repair_count": state["repair_count"] + 1,
+            }
 
     @traceable(name="memory_writer", run_type="chain")
     def memory_writer_node(state: AgentState,config: RunnableConfig | None = None,*,store: BaseStore | None = None,) -> AgentState:
@@ -289,16 +448,29 @@ def build_workflow(
             "memory_written_count": memories_written,
         }
 
-    def should_repair(state: AgentState) -> str:
+    def should_repair(state: AgentState) -> Literal["memory", "repair"]:
         """
         Conditional routing after critique.
+        
         Returns "memory" (accept + learn) or "repair" (regenerate).
-        Exits to "memory" if critique passed OR repair attempts are exhausted.
+        Exits to "memory" if:
+        - Critique passed AND tool execution succeeded (if applicable)
+        - OR repair attempts are exhausted
         """
-        if state["critique_result"]["passed"]:
+        critique_passed = state["critique_result"]["passed"]
+        
+        # Check tool execution success
+        tool_result = state.get("tool_result")
+        tool_succeeded = tool_result is None or tool_result.get("success", True)
+        
+        # Pass if both critique passed and tool succeeded
+        if critique_passed and tool_succeeded:
             return "memory"
+        
+        # Exit if max repairs reached
         if state["repair_count"] >= state["max_repairs"]:
             return "memory"
+        
         return "repair"
 
     # ------------------------------------------------------------------
@@ -306,33 +478,57 @@ def build_workflow(
     # ------------------------------------------------------------------
     graph = StateGraph(AgentState)
 
+    # Add all nodes
     graph.add_node("detect_intent", detect_intent)
     graph.add_node("retrieve_context", retrieve_context)
     graph.add_node("summarize", summarize_node)
     graph.add_node("generate_response", generate_response_node)
+    graph.add_node("tools", tool_node)
+    graph.add_node("process_tool_result", process_tool_result)
     graph.add_node("critique_response", critique_node)
     graph.add_node("repair_response", repair_node)
     graph.add_node("record_turn", record_turn)
     graph.add_node("memory_writer", memory_writer_node)
 
+    # Set entry point
     graph.set_entry_point("detect_intent")
     graph.add_edge("detect_intent", "retrieve_context")
 
+    # Conditional summarization
     graph.add_conditional_edges(
         "retrieve_context",
         should_summarize,
         {"summarize": "summarize", "continue": "generate_response"},
     )
     graph.add_edge("summarize", "generate_response")
-    graph.add_edge("generate_response", "critique_response")
+    
+    # After generate_response: use tools_condition to route (LLM decides)
+    # tools_condition returns "tools" if tool_calls present, END otherwise
+    graph.add_conditional_edges(
+        "generate_response",
+        tools_condition,
+        {"tools": "tools", END: "critique_response"}, # Returns END (literal "__end__") → if no tool_calls
+    )
+    
+    # After tool execution, process the result
+    graph.add_edge("tools", "process_tool_result")
+    graph.add_edge("process_tool_result", "critique_response")
 
+    # Critique/repair loop
     graph.add_conditional_edges(
         "critique_response",
         should_repair,
         {"memory": "memory_writer", "repair": "repair_response"},
     )
 
-    graph.add_edge("repair_response", "critique_response")
+    # After repair: use tools_condition again
+    graph.add_conditional_edges(
+        "repair_response",
+        tools_condition,
+        {"tools": "tools", END: "critique_response"},
+    )
+    
+    # Final steps
     graph.add_edge("memory_writer", "record_turn")
     graph.add_edge("record_turn", END)
 
