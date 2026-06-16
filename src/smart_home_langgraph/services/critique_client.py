@@ -10,8 +10,6 @@
 # ---------------------------------------------------------------------------
 from __future__ import annotations
 
-from langsmith import traceable
-
 from smart_home_langgraph.config.settings import get_settings
 from smart_home_langgraph.graph.state import AgentState, CritiqueResult
 from smart_home_langgraph.services.json_utils import result_to_model
@@ -85,7 +83,6 @@ def _build_standard_critique_prompt(state: AgentState) -> str:
     )
 
 
-@traceable(name="critique_response", run_type="llm")
 def critique_response(state: AgentState) -> CritiqueResult:
     """
     Evaluate response quality.

@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langsmith import traceable
 
 from smart_home_langgraph.config.settings import get_settings
 from smart_home_langgraph.memory.ltm_schema import MemoryDecision
@@ -57,7 +56,6 @@ def _invoke_ollama_fallback(settings, user_payload: str) -> MemoryDecision | Non
         return None
 
 
-@traceable(name="extract_structured_memories", run_type="llm")
 def extract_structured_memories(
     *,
     user_query: str,

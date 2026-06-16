@@ -13,12 +13,32 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, trim_messages
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage, trim_messages
 from langchain_core.messages.utils import count_tokens_approximately
 from langchain_core.tools import BaseTool
-from langsmith import traceable
 
 from smart_home_langgraph.config.settings import get_settings
+
+
+def _filter_tool_messages(messages: list) -> list:
+    """
+    Filter out AIMessages with tool_calls and their corresponding ToolMessages.
+    
+    Gemini requires that function call turns come immediately after a user turn
+    or after a function response turn. When trimming history, this sequence can
+    be broken. To avoid INVALID_ARGUMENT errors, we filter out tool-related
+    messages from the conversation history.
+    """
+    filtered = []
+    for msg in messages:
+        # Skip AIMessages that have tool_calls (function call turns)
+        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+            continue
+        # Skip ToolMessages (function response turns)
+        if isinstance(msg, ToolMessage):
+            continue
+        filtered.append(msg)
+    return filtered
 from smart_home_langgraph.graph.state import AgentState
 from smart_home_langgraph.services.json_utils import result_to_text
 from smart_home_langgraph.services.model_factory import build_model
@@ -29,7 +49,6 @@ def _requires_provider_api_key(settings) -> bool:
     return settings.llm_provider.lower() == "gemini"
 
 
-@traceable(name="build_generation_prompt", run_type="prompt")
 def _build_prompt_messages(state: AgentState, max_tokens: int = 2000) -> list:
     """Build a chat-style prompt trimmed to token limit using LangChain's trim_messages."""
     system_content = (
@@ -48,9 +67,11 @@ def _build_prompt_messages(state: AgentState, max_tokens: int = 2000) -> list:
     system_content += "Return a concise actionable answer in 4-6 bullet points."
 
     system_message = SystemMessage(content=system_content)
-    # Trim conversation history to fit within token budget, keeping the most recent messages.
+    # Filter out tool-related messages to avoid Gemini sequencing errors,
+    # then trim conversation history to fit within token budget.
+    filtered_messages = _filter_tool_messages(state["messages"])
     trimmed_history = trim_messages(
-        state["messages"],
+        filtered_messages,
         strategy="last",
         token_counter=count_tokens_approximately,
         max_tokens=max_tokens,
@@ -72,7 +93,6 @@ def _fallback_response(state: AgentState, reason: str) -> str:
     )
 
 
-@traceable(name="generate_response", run_type="llm")
 def generate_response(
     state: AgentState,
 ) -> tuple[str, bool]:
@@ -102,7 +122,6 @@ def generate_response(
         return _fallback_response(state, f"{settings.llm_provider} error: {exc}"), False
 
 
-@traceable(name="build_tool_prompt", run_type="prompt")
 def _build_tool_prompt_messages(state: AgentState, max_tokens: int = 2000) -> list:
     """
     Build a prompt for tool-enabled generation.
@@ -143,9 +162,11 @@ def _build_tool_prompt_messages(state: AgentState, max_tokens: int = 2000) -> li
     
     system_message = SystemMessage(content=system_content)
     
-    # Trim conversation history
+    # Filter out tool-related messages to avoid Gemini sequencing errors,
+    # then trim conversation history.
+    filtered_messages = _filter_tool_messages(state["messages"])
     trimmed_history = trim_messages(
-        state["messages"],
+        filtered_messages,
         strategy="last",
         token_counter=count_tokens_approximately,
         max_tokens=max_tokens,
@@ -154,7 +175,6 @@ def _build_tool_prompt_messages(state: AgentState, max_tokens: int = 2000) -> li
     return [system_message, *trimmed_history, HumanMessage(content=state["user_query"])]
 
 
-@traceable(name="generate_response_with_tools", run_type="llm")
 def generate_response_with_tools(
     state: AgentState,
     tools: Sequence[BaseTool],

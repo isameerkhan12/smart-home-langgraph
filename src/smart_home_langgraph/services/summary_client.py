@@ -11,7 +11,6 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.messages.utils import count_tokens_approximately
-from langsmith import traceable
 
 from smart_home_langgraph.config.settings import get_settings
 from smart_home_langgraph.services.json_utils import result_to_text
@@ -23,7 +22,6 @@ def _requires_provider_api_key(settings) -> bool:
     return settings.llm_provider.lower() == "gemini"
 
 
-@traceable(name="build_summary_prompt", run_type="prompt")
 def _build_summary_prompt(messages_to_summarize: list[Any]) -> list:
     """Build a simple prompt for summarizing old conversation messages."""
     system_message = SystemMessage(
@@ -39,7 +37,6 @@ def _build_summary_prompt(messages_to_summarize: list[Any]) -> list:
     return [system_message, HumanMessage(content=messages_text)]
 
 
-@traceable(name="summarize_messages", run_type="llm")
 def summarize_messages(messages_to_summarize: list[Any]) -> tuple[str, bool]:
     """Summarize a list of conversation messages using the configured provider."""
     settings = get_settings()
