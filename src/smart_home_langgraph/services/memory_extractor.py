@@ -12,14 +12,37 @@ from smart_home_langgraph.services.json_utils import result_to_model
 from smart_home_langgraph.services.model_factory import build_model
 
 
+# MEMORY_EXTRACTION_PROMPT = """You extract long-term memories from a smart-home assistant turn.
+
+# Rules:
+# - Return should_write=false if there is no durable memory worth storing.
+# - Output short atomic memories only.
+# - Use memory_type from: preference, recipe, mistake, general.
+# - Set is_new=false if a memory already exists with the same meaning.
+# - Avoid duplicates and avoid speculative facts.
+# """
+
 MEMORY_EXTRACTION_PROMPT = """You extract long-term memories from a smart-home assistant turn.
 
+Memory Types:
+- "recipe": Code patterns, calculation methods, or reusable approaches that worked successfully.
+  ALWAYS store as recipe if the response contains working Python code or a successful calculation method.
+  Example: "To calculate average energy: use df['Energy_Consumption_kWh'].mean()"
+- "mistake": Errors, failed approaches, or wrong column names to avoid in future.
+  Store if the response mentions an error, correction, or failed attempt.
+  Example: "Avoid using 'Voltage_Reading' column - correct name is 'Line_Voltage'"
+- "preference": User preferences about format, units, or behavior.
+- "general": Other useful facts about the smart home data or domain.
+
 Rules:
-- Return should_write=false if there is no durable memory worth storing.
-- Output short atomic memories only.
-- Use memory_type from: preference, recipe, mistake, general.
-- Set is_new=false if a memory already exists with the same meaning.
-- Avoid duplicates and avoid speculative facts.
+- Return should_write=true if ANY of these are present:
+  1. Working Python code that produced a result
+  2. A calculation method or formula
+  3. An error that was corrected
+  4. A user preference
+- Output short atomic memories that can be reused for similar tasks.
+- Set is_new=false ONLY if existing_memories already contains the exact same approach.
+- Be generous about storing recipes - they help answer similar future questions faster.
 """
 
 OLLAMA_FALLBACK_JSON_INSTRUCTION = (
