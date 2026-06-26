@@ -5,6 +5,8 @@
 #   never touch external APIs.
 # ---------------------------------------------------------------------------------
 import uuid
+import json
+import re
 from typing import Callable, Literal, Sequence
 
 from langchain_core.messages import (
@@ -38,6 +40,43 @@ ResponseGeneratorWithTools = Callable[[AgentState, Sequence[BaseTool]], AIMessag
 CritiqueGenerator = Callable[[AgentState], CritiqueResult]
 
 
+def render_tool_output(tool_output: object, indent: int = 0) -> str:
+    """Render tool output as readable text for the final response."""
+    prefix = "  " * indent
+
+    if isinstance(tool_output, str):
+        stripped = tool_output.strip()
+        if stripped.startswith("{") or stripped.startswith("["):
+            try:
+                tool_output = json.loads(stripped)
+            except Exception:
+                return tool_output
+        else:
+            return tool_output
+
+    if isinstance(tool_output, dict):
+        lines: list[str] = []
+        for key, value in tool_output.items():
+            if isinstance(value, (dict, list, tuple, set)):
+                lines.append(f"{prefix}- {key}:")
+                lines.append(render_tool_output(value, indent + 1))
+            else:
+                lines.append(f"{prefix}- {key}: {value}")
+        return "\n".join(lines)
+
+    if isinstance(tool_output, (list, tuple, set)):
+        lines: list[str] = []
+        for value in tool_output:
+            if isinstance(value, (dict, list, tuple, set)):
+                lines.append(f"{prefix}-")
+                lines.append(render_tool_output(value, indent + 1))
+            else:
+                lines.append(f"{prefix}- {value}")
+        return "\n".join(lines)
+
+    return f"{prefix}{tool_output}"
+
+
 def initial_state(
     query: str,
     max_repairs: int = 2,
@@ -55,6 +94,8 @@ def initial_state(
         "intent": "",
         "sensor_context": "",
         "memory_context": "",
+        "error_memory_context": "",
+        "error_signature": "",
         "response": "",
         "used_live_llm": False,
         # Tool execution state
@@ -79,6 +120,7 @@ def initial_state(
             "used_existing_recipe": False,
         },
         "memory_written_count": 0,
+        "error_memory_written_count": 0,
     }
 
 
@@ -135,6 +177,15 @@ def build_workflow(
                 lines.append(f"- [{memory_type}] {content}")
         return "\n".join(lines) if lines else "No relevant long-term memories found."
 
+    def build_error_signature(state: AgentState) -> str:
+        """Create a normalized error signature for retrieval and dedupe."""
+        tool_result = state.get("tool_result") or {}
+        error_text = str(tool_result.get("error", "unknown_error"))
+        normalized = re.sub(r"\d+", "<num>", error_text.lower())
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        tool_name = str(tool_result.get("tool_name", "unknown_tool"))
+        return f"{state['intent']}|{tool_name}|{normalized}"
+
     # ------------------------------------------------------------------
     # Node definitions (closures capture sim, retriever, response_gen, etc.)
     # ------------------------------------------------------------------
@@ -167,6 +218,36 @@ def build_workflow(
             memories = store.search(memory_namespace(config), query=state["user_query"], limit=8)
             memory_context = format_memories_for_prompt(memories)
         return {**state, "sensor_context": sensor_context, "memory_context": memory_context}
+
+    def retrieve_error_memory_node(state: AgentState,config: RunnableConfig | None = None,*,store: BaseStore | None = None,) -> AgentState:
+        """Retrieve error-specific memories using failed tool execution context."""
+        tool_result = state.get("tool_result")
+        if tool_result is None or tool_result.get("success", True):
+            return {**state, "error_memory_context": "No error-specific memories found.", "error_signature": ""}
+
+        signature = build_error_signature(state)
+        code_head = (tool_result.get("tool_input", "") or "").splitlines()
+        first_code_line = code_head[0] if code_head else ""
+        retrieval_query = (
+            f"{state['intent']} "
+            f"{tool_result.get('tool_name', 'tool')} "
+            f"{tool_result.get('error', '')} "
+            f"{first_code_line}"
+        ).strip()
+
+        if store is None:
+            return {
+                **state,
+                "error_memory_context": "No long-term memory store configured.",
+                "error_signature": signature,
+            }
+
+        memories = store.search(memory_namespace(config), query=retrieval_query, limit=5)
+        return {
+            **state,
+            "error_memory_context": format_memories_for_prompt(memories),
+            "error_signature": signature,
+        }
 
     def generate_response_node(state: AgentState) -> AgentState:
         """
@@ -239,26 +320,28 @@ def build_workflow(
             "error": error,
         }
         
+        # Format once and reuse the same human-readable output everywhere below.
+        formatted_output = render_tool_output(tool_output)
+
         # Build response based on tool type
         if tool_name == "python_repl":
             if success:
                 response = (
                     f"Based on my analysis of the smart home data:\n\n"
-                    f"**Result:**\n{tool_output}\n\n"
+                    f"**Result:**\n{formatted_output}\n\n"
                     f"This was calculated by executing:\n```python\n{code}\n```"
                 )
             else:
                 response = (
                     f"I attempted to analyze the data but encountered an error:\n\n"
-                    f"**Error:**\n{tool_output}\n\n"
+                    f"**Error:**\n{formatted_output}\n\n"
                     f"Let me try a different approach."
                 )
         else:
-            # Default generic formatter
             if success:
-                response = f"**{tool_name} Result:**\n{tool_output}"
+                response = f"**{tool_name} Result:**\n{formatted_output}"
             else:
-                response = f"**{tool_name} Error:**\n{tool_output}"
+                response = f"**{tool_name} Error:**\n{formatted_output}"
         
         return {
             **state,
@@ -338,6 +421,7 @@ def build_workflow(
                 f"\n\nPrevious code execution failed.\n"
                 f"Error: {tool_result.get('error', 'Unknown error')}\n"
                 f"Failed code:\n```python\n{tool_result.get('tool_input', '')}\n```\n"
+                f"Related past fixes/mistakes:\n{state.get('error_memory_context', 'No error-specific memories found.')}\n"
                 f"Critique hints: {state['critique_result']['repair_hints']}\n"
                 f"Please generate corrected Python code to answer the question."
             )
@@ -394,11 +478,13 @@ def build_workflow(
 
         if store is not None:
             ns = memory_namespace(config)
+            # Provide existing memory text so extractor can suppress semantic duplicates.
             existing_items = store.search(ns, limit=30)
             existing_memories_text = "\n".join(
                 item.value.get("content", "") for item in existing_items if item.value.get("content")
             ) or "(empty)"
 
+            # Reuse the same structured extractor path used across the app.
             decision = extract_structured_memories(
                 user_query=state["user_query"],
                 assistant_response=state["response"],
@@ -410,6 +496,7 @@ def build_workflow(
 
             if decision.should_write:
                 for memory in decision.memories:
+                    # Skip duplicates/empty memories exactly as flagged by extractor.
                     if not memory.is_new or not memory.text.strip():
                         continue
                     store.put(
@@ -438,29 +525,93 @@ def build_workflow(
             "memory_written_count": memories_written,
         }
 
-    def should_repair(state: AgentState) -> Literal["memory", "repair"]:
+    def error_memory_writer_node(state: AgentState,config: RunnableConfig | None = None,*,store: BaseStore | None = None,) -> AgentState:
+        """Persist error-specific mistake memories when tool failures remain unresolved."""
+        tool_result = state.get("tool_result")
+        # Only write error memory for real unresolved tool failures.
+        if store is None or tool_result is None or tool_result.get("success", True):
+            return {**state, "error_memory_written_count": 0}
+
+        ns = memory_namespace(config)
+        signature = state.get("error_signature") or build_error_signature(state)
+        # Fast dedupe guard: skip if this error signature already exists.
+        existing = store.search(ns, query=signature, limit=5)
+        for item in existing:
+            if item.value.get("metadata", {}).get("error_signature") == signature:
+                return {**state, "error_memory_written_count": 0}
+
+        # Feed prior memories into extractor to avoid writing near-duplicates.
+        existing_items = store.search(ns, limit=30)
+        existing_memories_text = "\n".join(
+            item.value.get("content", "") for item in existing_items if item.value.get("content")
+        ) or "(empty)"
+
+        # Compact failure transcript used as extraction source.
+        assistant_response = (
+            "Tool execution failed after repair attempts.\n"
+            f"Tool: {tool_result.get('tool_name', 'unknown_tool')}\n"
+            f"Error: {tool_result.get('error', '')}\n"
+            f"Failed code:\n{tool_result.get('tool_input', '')}\n"
+            f"Critique issues: {', '.join(state['critique_result']['issues'])}"
+        )
+
+        decision = extract_structured_memories(
+            user_query=f"Tool failure signature: {signature}",
+            assistant_response=assistant_response,
+            intent=state["intent"],
+            critique_passed=state["critique_result"]["passed"],
+            critique_issues=state["critique_result"]["issues"],
+            existing_memories_text=existing_memories_text,
+        )
+
+        errors_written = 0
+        if decision.should_write:
+            for memory in decision.memories:
+                # Error node stores only mistake memories to keep semantics clean.
+                if memory.memory_type != MemoryType.MISTAKE:
+                    continue
+                if not memory.is_new or not memory.text.strip():
+                    continue
+                metadata = dict(memory.metadata)
+                metadata["error_signature"] = signature
+                store.put(
+                    ns,
+                    str(uuid.uuid4()),
+                    {
+                        "content": memory.text.strip(),
+                        "memory_type": MemoryType.MISTAKE.value,
+                        "intent": state["intent"],
+                        "metadata": metadata,
+                    },
+                )
+                errors_written += 1
+                break
+
+        return {
+            **state,
+            "error_memory_written_count": errors_written,
+            "memory_written_count": state.get("memory_written_count", 0) + errors_written,
+        }
+
+    def route_after_critique(state: AgentState) -> Literal["memory", "repair", "retrieve_error_memory", "error_memory_writer"]:
         """
-        Conditional routing after critique.
-        
-        Returns "memory" (accept + learn) or "repair" (regenerate).
-        Exits to "memory" if:
-        - Critique passed AND tool execution succeeded (if applicable)
-        - OR repair attempts are exhausted
+        Conditional routing after critique with error-memory handling.
         """
         critique_passed = state["critique_result"]["passed"]
-        
-        # Check tool execution success
         tool_result = state.get("tool_result")
-        tool_succeeded = tool_result is None or tool_result.get("success", True)
-        
-        # Pass if both critique passed and tool succeeded
-        if critique_passed and tool_succeeded:
+        tool_failed = tool_result is not None and not tool_result.get("success", True)
+
+        if critique_passed and not tool_failed:
             return "memory"
-        
-        # Exit if max repairs reached
+
         if state["repair_count"] >= state["max_repairs"]:
+            if tool_failed:
+                return "error_memory_writer"
             return "memory"
-        
+
+        if tool_failed:
+            return "retrieve_error_memory"
+
         return "repair"
 
     # ------------------------------------------------------------------
@@ -476,7 +627,9 @@ def build_workflow(
     graph.add_node("tools", tool_node)
     graph.add_node("process_tool_result", process_tool_result)
     graph.add_node("critique_response", critique_node)
+    graph.add_node("retrieve_error_memory", retrieve_error_memory_node)
     graph.add_node("repair_response", repair_node)
+    graph.add_node("error_memory_writer", error_memory_writer_node)
     graph.add_node("record_turn", record_turn)
     graph.add_node("memory_writer", memory_writer_node)
 
@@ -507,9 +660,17 @@ def build_workflow(
     # Critique/repair loop
     graph.add_conditional_edges(
         "critique_response",
-        should_repair,
-        {"memory": "memory_writer", "repair": "repair_response"},
+        route_after_critique,
+        {
+            "memory": "memory_writer",
+            "repair": "repair_response",
+            "retrieve_error_memory": "retrieve_error_memory",
+            "error_memory_writer": "error_memory_writer",
+        },
     )
+
+    # On tool failure, fetch error-specific memories before attempting repair.
+    graph.add_edge("retrieve_error_memory", "repair_response")
 
     # After repair: use tools_condition again
     graph.add_conditional_edges(
@@ -520,6 +681,7 @@ def build_workflow(
     
     # Final steps
     graph.add_edge("memory_writer", "record_turn")
+    graph.add_edge("error_memory_writer", "record_turn")
     graph.add_edge("record_turn", END)
 
     # Compile with both STM (checkpointer) and optional LTM (store).

@@ -83,6 +83,12 @@ class AgentState(TypedDict):
     # Long-term memory context assembled from mistakes, recipes, preferences.
     memory_context: str
 
+    # Error-focused memory context retrieved for repair attempts.
+    error_memory_context: str
+
+    # Normalized error signature used for deduping and retrieval.
+    error_signature: str
+
     # ---- Response (populated by generate_response / repair_response nodes) --
     # The final answer to return to the user. May be regenerated on repair.
     response: str
@@ -116,3 +122,6 @@ class AgentState(TypedDict):
 
     # Number of records written to memory stores in this episode.
     memory_written_count: int
+
+    # Number of error-memory records written in this episode.
+    error_memory_written_count: int

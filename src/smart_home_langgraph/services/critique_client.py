@@ -17,22 +17,36 @@ from smart_home_langgraph.services.llm_schema import CritiqueDecision
 from smart_home_langgraph.services.model_factory import build_model
 
 
+def _build_shared_critique_prompt(state: AgentState) -> str:
+    """Build the shared critique context used by both prompt variants."""
+    return (
+        f"User Query:\n{state['user_query']}\n\n"
+        f"Detected Intent:\n{state['intent']}\n\n"
+        f"Response to Evaluate:\n{state['response']}\n\n"
+    )
+
+
 def _build_code_critique_prompt(state: AgentState) -> str:
     """Build a critique prompt for code/tool execution results."""
     tool_result = state.get("tool_result")
     
     prompt = (
         "You are a quality evaluator for smart-home data analysis responses.\n"
+        "Apply the shared response-quality checks as well as the code-execution checks below.\n"
+        "Shared response-quality criteria:\n"
+        "  1. Is it actionable and concrete?\n"
+        "  2. Does it prioritize safety?\n"
+        "  3. Does it avoid contradictions with sensor data?\n"
+        "  4. Judge the final answer, not raw tool formatting artifacts.\n"
+        "  5. Is it concise (max 4-6 points)?\n\n"
         "Evaluate the following response that includes code execution results.\n\n"
         "Evaluation criteria:\n"
         "  1. Did the code execute successfully without errors?\n"
         "  2. Does the result answer the user's question?\n"
-        "  3. Is the result formatted clearly and understandably?\n"
-        "  4. Are the calculations/analysis logically correct?\n"
-        "  5. Does the response provide context for the numbers?\n\n"
-        f"User Query:\n{state['user_query']}\n\n"
-        f"Detected Intent:\n{state['intent']}\n\n"
-        f"Response to Evaluate:\n{state['response']}\n\n"
+        "  3. Are the calculations/analysis logically correct?\n"
+        "  4. Does the response provide context for the numbers?\n"
+        "  5. Is the final answer clear and readable after formatting?\n\n"
+        f"{_build_shared_critique_prompt(state)}"
     )
     
     if tool_result:
@@ -70,10 +84,10 @@ def _build_standard_critique_prompt(state: AgentState) -> str:
         "  1. Is it actionable and concrete?\n"
         "  2. Does it prioritize safety?\n"
         "  3. Does it avoid contradictions with sensor data?\n"
-        "  4. Is it concise (max 4-6 points)?\n\n"
-        f"User Query:\n{state['user_query']}\n\n"
-        f"Detected Intent:\n{state['intent']}\n\n"
-        f"Response to Evaluate:\n{state['response']}\n\n"
+        "  4. Judge the final answer, not raw tool formatting artifacts.\n"
+        "  5. Is it concise (max 4-6 points)?\n\n"
+        
+        f"{_build_shared_critique_prompt(state)}"
         "Return a JSON object with:\n"
         '  "passed": true/false\n'
         '  "issues": list of identified problems (empty if passed)\n'
