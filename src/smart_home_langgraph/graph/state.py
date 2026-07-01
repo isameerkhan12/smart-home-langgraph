@@ -52,7 +52,7 @@ class CritiqueResult(TypedDict):
     # List of identified issues (empty if passed).
     issues: list[str]
 
-    # Severity level: "critical", "medium", or "low".
+    # Review outcome: "success", "minor_revision", "major_revision", or "fail".
     severity: str
 
     # Hints/suggestions for repairing the response.

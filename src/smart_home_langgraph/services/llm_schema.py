@@ -14,5 +14,5 @@ class CritiqueDecision(BaseModel):
 
     passed: bool = True
     issues: list[str] = Field(default_factory=list)
-    severity: Literal["critical", "medium", "low"] = "low"
+    severity: Literal["success", "minor_revision", "major_revision", "fail"] = "success"
     repair_hints: str = ""

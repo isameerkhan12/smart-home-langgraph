@@ -31,21 +31,19 @@ def _build_code_critique_prompt(state: AgentState) -> str:
     tool_result = state.get("tool_result")
     
     prompt = (
-        "You are a quality evaluator for smart-home data analysis responses.\n"
-        "Apply the shared response-quality checks as well as the code-execution checks below.\n"
-        "Shared response-quality criteria:\n"
-        "  1. Is it actionable and concrete?\n"
-        "  2. Does it prioritize safety?\n"
-        "  3. Does it avoid contradictions with sensor data?\n"
-        "  4. Judge the final answer, not raw tool formatting artifacts.\n"
-        "  5. Is it concise (max 4-6 points)?\n\n"
-        "Evaluate the following response that includes code execution results.\n\n"
-        "Evaluation criteria:\n"
-        "  1. Did the code execute successfully without errors?\n"
-        "  2. Does the result answer the user's question?\n"
-        "  3. Are the calculations/analysis logically correct?\n"
-        "  4. Does the response provide context for the numbers?\n"
-        "  5. Is the final answer clear and readable after formatting?\n\n"
+        "You are a strict evaluator for smart-home data analysis responses.\n"
+        "Use only evidence from the task, code, and output.\n\n"
+        "Checks (all required):\n"
+        "  1. Code plausibility: Is the executed code plausible given the task?\n"
+        "  2. Execution correctness: Did execution succeed without errors?\n"
+        "  3. Numerical plausibility: Are values realistic, internally consistent, and appropriate for the domain?\n"
+        "     - Example checks (not exhaustive):\n"
+        "       percentages are typically in [0, 100] unless the task defines a different scale.\n"
+        "       quantities such as energy, counts, durations, and rates are usually non-negative unless justified.\n"
+        "       units, magnitudes, and trends in the response should match the computed output.\n"
+        "  4. Logical correctness: Are the calculations and analysis steps logically correct?\n"
+        "  5. Response plausibility and consistency: Is the final response plausible and consistent with the task ?\n"
+        "  6. Clarity: The execution result may be raw output from a Python function. Ignore and do not complain about formatting issues; evaluate correctness only.\n\n"
         f"{_build_shared_critique_prompt(state)}"
     )
     
@@ -63,13 +61,14 @@ def _build_code_critique_prompt(state: AgentState) -> str:
         "Return a JSON object with:\n"
         '  "passed": true/false\n'
         '  "issues": list of identified problems (empty if passed)\n'
-        '  "severity": "critical", "medium", or "low"\n'
+        '  "severity": "success", "minor_revision", "major_revision", or "fail"\n'
         '  "repair_hints": suggestions for fixing code or improving response (empty if passed)\n\n'
-        "Mark as FAILED (passed=false) if:\n"
-        "- Code execution had errors\n"
-        "- Result doesn't answer the question\n"
-        "- Calculations appear incorrect\n"
-        "- Response is unclear or missing context\n\n"
+        "Set passed=true only for severity=success. Set passed=false for all revision or fail outcomes.\n\n"
+        "Severity guide:\n"
+        "- success: correct and no repair needed\n"
+        "- minor_revision: mostly correct, but needs a small fix or clarification\n"
+        "- major_revision: significant issues in reasoning, plausibility, or answer consistency\n"
+        "- fail: execution failed or the code/output is fundamentally unusable\n\n"
         "Respond ONLY with the JSON object, wrapped in ```json ```."
     )
     
@@ -91,8 +90,9 @@ def _build_standard_critique_prompt(state: AgentState) -> str:
         "Return a JSON object with:\n"
         '  "passed": true/false\n'
         '  "issues": list of identified problems (empty if passed)\n'
-        '  "severity": "critical", "medium", or "low"\n'
+        '  "severity": "success", "minor_revision", "major_revision", or "fail"\n'
         '  "repair_hints": suggestions for improvement (empty if passed)\n\n'
+        "Set passed=true only for severity=success. Set passed=false for all revision or fail outcomes.\n\n"
         "Respond ONLY with the JSON object, wrapped in ```json ```."
     )
 
@@ -106,7 +106,7 @@ def critique_response(state: AgentState) -> CritiqueResult:
     - Tool/code execution: successful execution, correct answer, clear formatting
 
     Returns:
-      CritiqueResult dict with passed, issues, severity, repair_hints.
+    CritiqueResult dict with passed, issues, severity, repair_hints.
     """
     settings = get_settings()
     if settings.llm_provider.lower() == "gemini" and not settings.gemini_api_key:
@@ -114,7 +114,7 @@ def critique_response(state: AgentState) -> CritiqueResult:
         return {
             "passed": True,
             "issues": [],
-            "severity": "low",
+            "severity": "success",
             "repair_hints": "",
         }
 
@@ -131,7 +131,7 @@ def critique_response(state: AgentState) -> CritiqueResult:
             return {
                 "passed": False,
                 "issues": ["Code execution failed", tool_result.get("error", "Unknown error")],
-                "severity": "critical",
+                "severity": "fail",
                 "repair_hints": (
                     f"The previous code raised an error. "
                     f"Fix the following issue: {tool_result.get('error', 'Unknown error')}. "
@@ -154,6 +154,6 @@ def critique_response(state: AgentState) -> CritiqueResult:
         return {
             "passed": True,
             "issues": [],
-            "severity": "low",
+            "severity": "success",
             "repair_hints": f"Critique unavailable: {exc}",
         }

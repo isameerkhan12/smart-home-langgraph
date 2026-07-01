@@ -29,7 +29,7 @@ from smart_home_langgraph.evaluation.metrics import EpisodeRecord
 from smart_home_langgraph.graph.state import AgentState, CritiqueResult, ToolExecutionResult
 from smart_home_langgraph.memory.ltm_schema import MemoryType
 from smart_home_langgraph.services.critique_client import critique_response
-from smart_home_langgraph.services.response_client import generate_response, generate_response_with_tools
+from smart_home_langgraph.services.response_client import generate_response, generate_tool_enabled_response
 from smart_home_langgraph.services.summary_client import summarize_messages
 from smart_home_langgraph.services.memory_extractor import extract_structured_memories
 from smart_home_langgraph.tools.python_executor import get_smart_home_tools
@@ -38,6 +38,9 @@ from smart_home_langgraph.tools.python_executor import get_smart_home_tools
 ResponseGenerator = Callable[[AgentState], tuple[str, bool]]
 ResponseGeneratorWithTools = Callable[[AgentState, Sequence[BaseTool]], AIMessage]
 CritiqueGenerator = Callable[[AgentState], CritiqueResult]
+
+# Experiment toggle: when False, keep raw tool output (no formatting).
+TOOL_OUTPUT_FORMATTING_ENABLED = False
 
 
 def render_tool_output(tool_output: object, indent: int = 0) -> str:
@@ -106,7 +109,7 @@ def initial_state(
         "critique_result": {
             "passed": False,
             "issues": [],
-            "severity": "low",
+            "severity": "minor_revision",
             "repair_hints": "",
         },
         "repair_count": 0,
@@ -258,7 +261,7 @@ def build_workflow(
         """
         if available_tools:
             # LLM with tools bound - it decides autonomously whether to use them
-            llm_response = generate_response_with_tools(state, available_tools)
+            llm_response = generate_tool_enabled_response(state, available_tools)
             
             if llm_response.tool_calls:
                 # LLM chose to use a tool
@@ -320,8 +323,12 @@ def build_workflow(
             "error": error,
         }
         
-        # Format once and reuse the same human-readable output everywhere below.
-        formatted_output = render_tool_output(tool_output)
+        # Toggle formatter on/off for critique prompt experiments.
+        formatted_output = (
+            render_tool_output(tool_output)
+            if TOOL_OUTPUT_FORMATTING_ENABLED
+            else tool_output
+        )
 
         # Build response based on tool type
         if tool_name == "python_repl":
@@ -334,7 +341,8 @@ def build_workflow(
             else:
                 response = (
                     f"I attempted to analyze the data but encountered an error:\n\n"
-                    f"**Error:**\n{formatted_output}\n\n"
+                    f"**Result:**\n{formatted_output}\n\n"
+                    f"**Error:**\n{error}\n\n"
                     f"Let me try a different approach."
                 )
         else:
@@ -436,7 +444,7 @@ def build_workflow(
         
         # Regenerate with tools if available (LLM decides autonomously)
         if available_tools:
-            llm_response = generate_response_with_tools(repair_state, available_tools)
+            llm_response = generate_tool_enabled_response(repair_state, available_tools)
             
             if llm_response.tool_calls:
                 # PythonAstREPLTool uses 'query' as the argument name for code
