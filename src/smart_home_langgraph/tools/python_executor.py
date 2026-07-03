@@ -2,7 +2,7 @@
 # tools/python_executor.py
 # Purpose: Python code execution tool for DataFrame analysis.
 #
-# Uses LangChain's PythonAstREPLTool with pre-loaded smart home DataFrame.
+# Uses LangChain's PythonREPLTool with a pre-loaded smart home DataFrame.
 # ---------------------------------------------------------------------------
 from __future__ import annotations
 
@@ -12,7 +12,8 @@ from functools import lru_cache
 import numpy as np
 import pandas as pd
 from langchain_core.tools import BaseTool
-from langchain_experimental.tools import PythonAstREPLTool
+from langchain_experimental.tools.python.tool import PythonREPLTool
+from langchain_experimental.utilities.python import PythonREPL
 
 # Path to the telemetry CSV in the data/ folder.
 _DATA_FILE = os.path.join(
@@ -52,7 +53,7 @@ def get_smart_home_tools(dataframe_path: str | None = None) -> list[BaseTool]:
     """
     Get tools for the smart home agent.
     
-    Returns a PythonAstREPLTool with:
+    Returns a PythonREPLTool with:
     - Pre-loaded DataFrame as 'df'
     - pandas (pd) and numpy (np) available
     
@@ -62,8 +63,9 @@ def get_smart_home_tools(dataframe_path: str | None = None) -> list[BaseTool]:
     path = dataframe_path or _DATA_FILE
     df = _load_dataframe(path)
     
-    tool = PythonAstREPLTool(
-        locals={"df": df, "pd": pd, "np": np},
+    repl = PythonREPL(_globals={"df": df, "pd": pd, "np": np})
+    tool = PythonREPLTool(
+        python_repl=repl,
         name="python_repl",
         description=_TOOL_DESCRIPTION,
     )
