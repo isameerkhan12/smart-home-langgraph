@@ -91,7 +91,7 @@ def extract_structured_memories(
     """Extract typed memory candidates from the current interaction."""
     settings = get_settings()
     provider = settings.llm_provider.lower()
-    if provider == "gemini" and not settings.gemini_api_key:
+    if provider == "openrouter" and not settings.openrouter_api_key:
         return MemoryDecision(should_write=False, memories=[])
 
     model = build_model(

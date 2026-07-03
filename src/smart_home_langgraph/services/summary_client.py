@@ -19,7 +19,7 @@ from smart_home_langgraph.services.model_factory import build_model
 
 def _requires_provider_api_key(settings) -> bool:
     """Return True only when current provider requires an API key."""
-    return settings.llm_provider.lower() == "gemini"
+    return settings.llm_provider.lower() == "openrouter"
 
 
 def _build_summary_prompt(messages_to_summarize: list[Any]) -> list:
@@ -40,8 +40,8 @@ def _build_summary_prompt(messages_to_summarize: list[Any]) -> list:
 def summarize_messages(messages_to_summarize: list[Any]) -> tuple[str, bool]:
     """Summarize a list of conversation messages using the configured provider."""
     settings = get_settings()
-    if _requires_provider_api_key(settings) and not settings.gemini_api_key:
-        return "[Summarization skipped: missing GEMINI_API_KEY]", False
+    if _requires_provider_api_key(settings) and not settings.openrouter_api_key:
+        return "[Summarization skipped: missing OPENROUTER_API_KEY]", False
 
     prompt_messages = _build_summary_prompt(messages_to_summarize)
     _ = count_tokens_approximately(prompt_messages)

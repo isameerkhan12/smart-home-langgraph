@@ -24,10 +24,9 @@ def _filter_tool_messages(messages: list) -> list:
     """
     Filter out AIMessages with tool_calls and their corresponding ToolMessages.
     
-    Gemini requires that function call turns come immediately after a user turn
-    or after a function response turn. When trimming history, this sequence can
-    be broken. To avoid INVALID_ARGUMENT errors, we filter out tool-related
-    messages from the conversation history.
+    Some providers are strict about preserving function-call turn ordering.
+    When trimming history, this sequence can break and cause invalid request
+    errors. We filter tool-related messages from history before generation.
     """
     filtered = []
     for msg in messages:
@@ -46,7 +45,14 @@ from smart_home_langgraph.services.model_factory import build_model
 
 def _requires_provider_api_key(settings) -> bool:
     """Return True only when current provider requires an API key."""
-    return settings.llm_provider.lower() == "gemini"
+    return settings.llm_provider.lower() == "openrouter"
+
+
+def _provider_api_key_name(settings) -> str:
+    """Return required API key env var name for current provider."""
+    if settings.llm_provider.lower() == "openrouter":
+        return "OPENROUTER_API_KEY"
+    return "API_KEY"
 
 
 def _build_prompt_messages(state: AgentState, max_tokens: int = 2000) -> list:
@@ -67,7 +73,7 @@ def _build_prompt_messages(state: AgentState, max_tokens: int = 2000) -> list:
     system_content += "Return a concise actionable answer in 4-6 bullet points."
 
     system_message = SystemMessage(content=system_content)
-    # Filter out tool-related messages to avoid Gemini sequencing errors,
+    # Filter out tool-related messages to avoid provider sequencing errors,
     # then trim conversation history to fit within token budget.
     filtered_messages = _filter_tool_messages(state["messages"])
     trimmed_history = trim_messages(
@@ -106,8 +112,8 @@ def generate_response(
       (response_text, used_live_llm)
     """
     settings = get_settings()
-    if _requires_provider_api_key(settings) and not settings.gemini_api_key:
-        return _fallback_response(state, "missing GEMINI_API_KEY"), False
+    if _requires_provider_api_key(settings) and not settings.openrouter_api_key:
+        return _fallback_response(state, f"missing {_provider_api_key_name(settings)}"), False
 
     prompt_messages = _build_prompt_messages(state)
 
@@ -162,7 +168,7 @@ def _build_tool_prompt_messages(state: AgentState, max_tokens: int = 2000) -> li
     
     system_message = SystemMessage(content=system_content)
     
-    # Filter out tool-related messages to avoid Gemini sequencing errors,
+    # Filter out tool-related messages to avoid provider sequencing errors,
     # then trim conversation history.
     filtered_messages = _filter_tool_messages(state["messages"])
     trimmed_history = trim_messages(
@@ -195,9 +201,9 @@ def generate_response_with_tools(
     settings = get_settings()
     
     # Handle missing API key
-    if _requires_provider_api_key(settings) and not settings.gemini_api_key:
+    if _requires_provider_api_key(settings) and not settings.openrouter_api_key:
         return AIMessage(
-            content=_fallback_response(state, "missing GEMINI_API_KEY")
+            content=_fallback_response(state, f"missing {_provider_api_key_name(settings)}")
         )
     
     prompt_messages = _build_tool_prompt_messages(state)
@@ -221,4 +227,12 @@ def generate_response_with_tools(
         return AIMessage(
             content=_fallback_response(state, f"{settings.llm_provider} error: {exc}")
         )
+
+
+def generate_tool_enabled_response(
+    state: AgentState,
+    tools: Sequence[BaseTool],
+) -> AIMessage:
+    """Backward-compatible alias used by workflow nodes."""
+    return generate_response_with_tools(state, tools)
 

@@ -24,25 +24,25 @@ def build_model(
             temperature=temperature,
         )
     elif provider == "openrouter":
-        from langchain_openai import ChatOpenAI
+        from langchain_openrouter import ChatOpenRouter
 
-        model = ChatOpenAI(
-            model=settings.openrouter_model,
-            openai_api_key=settings.openrouter_api_key,
-            openai_api_base="https://openrouter.ai/api/v1",
+        if not settings.openrouter_api_key:
+            raise ValueError(
+                "OPENROUTER_API_KEY is required when LLM_PROVIDER=openrouter."
+            )
+
+        model = ChatOpenRouter(
+            model_name=settings.openrouter_model,
+            openrouter_api_key=settings.openrouter_api_key,
+            openrouter_api_base="https://openrouter.ai/api/v1",
             temperature=temperature,
-            default_headers={
-                "HTTP-Referer": "https://github.com/smart-home-langgraph",
-                "X-Title": "Smart Home LangGraph",
-            },
+            app_url="https://github.com/smart-home-langgraph",
+            app_title="Smart Home LangGraph",
         )
     else:
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
-        model = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=settings.gemini_api_key,
-            temperature=temperature,
+        raise ValueError(
+            f"Unsupported LLM_PROVIDER '{settings.llm_provider}'. "
+            "Supported providers: openrouter, ollama."
         )
 
     if structured_output_schema is not None:

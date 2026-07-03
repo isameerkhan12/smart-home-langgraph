@@ -4,7 +4,7 @@
 # Purpose:
 #   Evaluate response quality using a structured critique prompt.
 #   Determines if the response needs repair or is acceptable to return.
-#   Handles Gemini errors gracefully with fallback "accept" decision.
+#   Handles provider/runtime errors gracefully with fallback "accept" decision.
 #
 #   Also evaluates tool/code execution results for data analysis queries.
 # ---------------------------------------------------------------------------
@@ -109,7 +109,7 @@ def critique_response(state: AgentState) -> CritiqueResult:
     CritiqueResult dict with passed, issues, severity, repair_hints.
     """
     settings = get_settings()
-    if settings.llm_provider.lower() == "gemini" and not settings.gemini_api_key:
+    if settings.llm_provider.lower() == "openrouter" and not settings.openrouter_api_key:
         # If no key, assume response is acceptable (safe fallback).
         return {
             "passed": True,

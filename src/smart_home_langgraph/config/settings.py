@@ -46,7 +46,7 @@ def get_settings() -> Settings:
     load_dotenv()
     return Settings(
         gemini_api_key=os.getenv("GEMINI_API_KEY"),
-        llm_provider=os.getenv("LLM_PROVIDER", "gemini").strip().lower(),
+        llm_provider=os.getenv("LLM_PROVIDER", "openrouter").strip().lower(),
         ollama_model=os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
