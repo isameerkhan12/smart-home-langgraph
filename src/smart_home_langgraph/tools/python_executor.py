@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import os
-from functools import lru_cache
 
 import numpy as np
 import pandas as pd
@@ -19,34 +18,52 @@ from langchain_experimental.utilities.python import PythonREPL
 _DATA_FILE = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
     "data",
-    "preprocessed_dataset.csv",
+    "House_1.csv",
+    "House_1.csv",
 )
 
 # Tool description with column info for LLM context
 _TOOL_DESCRIPTION = (
-    "Execute Python code to analyze smart home telemetry data. "
+    "Execute Python code to analyze smart home energy consumption data. "
     "The DataFrame is available as 'df' with columns: "
-    "Unix_Timestamp, timestamp (datetime), Transaction_ID, "
-    "Television, Dryer, Oven, Refrigerator, Microwave (appliance states 0/1), "
-    "Line_Voltage, Voltage, Apparent_Power, Energy_Consumption_kWh, "
-    "Offloading_Decision, Bandwidth. "
+    "Time (datetime string), Unix (timestamp), Aggregate (total power), "
+    "Fridge, Chest_Freezer, Upright_Freezer, Tumble_Dryer, Washing_Machine, "
+    "Dishwasher, Computer_Site, Television_Site, Electric_Heater (all in Watts). "
     "Use pandas/numpy for analysis. Always print the final result."
 )
 
+# Appliance name mapping for column renaming
+_APPLIANCE_NAMES = {
+    "Appliance1": "Fridge",
+    "Appliance2": "Chest_Freezer",
+    "Appliance3": "Upright_Freezer",
+    "Appliance4": "Tumble_Dryer",
+    "Appliance5": "Washing_Machine",
+    "Appliance6": "Dishwasher",
+    "Appliance7": "Computer_Site",
+    "Appliance8": "Television_Site",
+    "Appliance9": "Electric_Heater",
+}
 
-@lru_cache(maxsize=1)
+
 def _load_dataframe(path: str = _DATA_FILE) -> pd.DataFrame:
-    """Load and preprocess the telemetry DataFrame (cached)."""
+    """Load and preprocess the energy consumption DataFrame."""
     df = pd.read_csv(path)
-    # Normalize column names
+    # Normalize column names (strip whitespace, replace spaces)
     df.columns = [
         col.strip().replace(" ", "_").replace("(", "").replace(")", "")
         for col in df.columns
     ]
+    # Rename Appliance columns to their real names
+    df = df.rename(columns=_APPLIANCE_NAMES)
     # Add datetime column for time-based analysis
-    if "Unix_Timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["Unix_Timestamp"], unit="s")
+    if "Unix" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["Unix"], unit="s")
     return df
+
+
+# Load DataFrame at module import time (once per process)
+_DF = _load_dataframe(_DATA_FILE)
 
 
 def get_smart_home_tools(dataframe_path: str | None = None) -> list[BaseTool]:
@@ -58,10 +75,11 @@ def get_smart_home_tools(dataframe_path: str | None = None) -> list[BaseTool]:
     - pandas (pd) and numpy (np) available
     
     Args:
-        dataframe_path: Optional custom path to telemetry CSV.
+        dataframe_path: Optional custom path to telemetry CSV (for testing).
+                       If None, uses the globally loaded DataFrame.
     """
-    path = dataframe_path or _DATA_FILE
-    df = _load_dataframe(path)
+    # Use global DataFrame by default, or load custom one if path provided
+    df = _DF if dataframe_path is None else _load_dataframe(dataframe_path)
     
     repl = PythonREPL(_globals={"df": df, "pd": pd, "np": np})
     tool = PythonREPLTool(
