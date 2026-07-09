@@ -58,6 +58,13 @@ class CritiqueResult(TypedDict):
     # Hints/suggestions for repairing the response.
     repair_hints: str
 
+    # Why the response was accepted (empty when not passed).
+    pass_reasons: list[str]
+
+    # Critique execution status for observability/debugging.
+    # Values: "not_run", "completed", "skipped_config", "fallback_error".
+    critique_status: str
+
 
 class AgentState(TypedDict):
     """Complete state schema shared by every node in the workflow."""

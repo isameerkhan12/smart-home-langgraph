@@ -24,7 +24,6 @@ from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.store.base import BaseStore
 
-from smart_home_langgraph.data.loader import HomeDataLoader
 from smart_home_langgraph.evaluation.metrics import EpisodeRecord
 from smart_home_langgraph.graph.state import AgentState, CritiqueResult, ToolExecutionResult
 from smart_home_langgraph.memory.ltm_schema import MemoryType
@@ -111,6 +110,8 @@ def initial_state(
             "issues": [],
             "severity": "minor_revision",
             "repair_hints": "",
+            "pass_reasons": [],
+            "critique_status": "not_run",
         },
         "repair_count": 0,
         "max_repairs": max_repairs,
@@ -130,7 +131,6 @@ def initial_state(
 def build_workflow(
     response_generator: ResponseGenerator | None = None,
     critique_generator: CritiqueGenerator | None = None,
-    loader: HomeDataLoader | None = None,
     checkpointer: SqliteSaver | None = None,
     # Native LangGraph long-term store (e.g., PostgresStore).
     store: BaseStore | None = None,
@@ -145,8 +145,6 @@ def build_workflow(
                           Default: generate_response (real provider call).
       critique_generator  Callable that returns a CritiqueResult dict.
                           Default: critique_response (real Gemini critique).
-      loader              HomeDataLoader that serves telemetry summaries
-                          backed by Postgres structured store.
       checkpointer        LangGraph checkpointer for persistent chat state.
                           Default: no checkpointing.
       store               LangGraph BaseStore for long-term memory.
@@ -154,7 +152,6 @@ def build_workflow(
       max_repairs         Maximum repair loop iterations. Default: 2.
       tools               List of tools for code execution. Default: smart home tools.
     """
-    data_loader = loader or HomeDataLoader()
     response_gen = response_generator or generate_response
     critique_gen = critique_generator or critique_response
     
@@ -210,17 +207,15 @@ def build_workflow(
 
     def retrieve_context(state: AgentState,config: RunnableConfig | None = None,*,store: BaseStore | None = None,) -> AgentState:
         """
-        Build two context strings injected into the generation prompt:
-          1. sensor_context  — recent telemetry summary from structured store
-          2. memory_context  — mistakes + recipes + preferences from memory stores
+        Build memory context injected into the generation prompt:
+          - memory_context  — mistakes + recipes + preferences from memory stores
         """
-        sensor_context = data_loader.context_window(hours=24)
         if store is None:
             memory_context = "No long-term memory store configured."
         else:
             memories = store.search(memory_namespace(config), query=state["user_query"], limit=8)
             memory_context = format_memories_for_prompt(memories)
-        return {**state, "sensor_context": sensor_context, "memory_context": memory_context}
+        return {**state, "memory_context": memory_context}
 
     def retrieve_error_memory_node(state: AgentState,config: RunnableConfig | None = None,*,store: BaseStore | None = None,) -> AgentState:
         """Retrieve error-specific memories using failed tool execution context."""

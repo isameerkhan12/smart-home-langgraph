@@ -59,11 +59,10 @@ def _build_prompt_messages(state: AgentState, max_tokens: int = 2000) -> list:
     """Build a chat-style prompt trimmed to token limit using LangChain's trim_messages."""
     system_content = (
         "You are a smart-home assistant.\n"
-        "Use the provided sensor and memory context.\n"
+        "Use the provided memory context and tools for data analysis.\n"
         "Carry context forward across the conversation when the user asks follow-up questions.\n"
         "Prioritize: safety, avoid known mistakes, reuse proven recipe, and obey preferences.\n\n"
         f"Detected Intent:\n{state['intent']}\n\n"
-        f"Sensor Context:\n{state['sensor_context']}\n\n"
         f"Memory Context:\n{state['memory_context']}\n\n"
     )
     # Include summary if it exists (from previous message summarization)
@@ -95,7 +94,7 @@ def _fallback_response(state: AgentState, reason: str) -> str:
         "[Phase 3 fallback: live LLM call not used] "
         f"Reason: {reason}. "
         f"Intent detected: {state['intent']}. "
-        "Use sensor and memory context to produce a practical next step."
+        "Use memory context and available tools to produce a practical next step."
     )
 
 

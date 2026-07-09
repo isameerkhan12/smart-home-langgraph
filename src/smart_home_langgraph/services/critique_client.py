@@ -62,7 +62,9 @@ def _build_code_critique_prompt(state: AgentState) -> str:
         '  "passed": true/false\n'
         '  "issues": list of identified problems (empty if passed)\n'
         '  "severity": "success", "minor_revision", "major_revision", or "fail"\n'
-        '  "repair_hints": suggestions for fixing code or improving response (empty if passed)\n\n'
+        '  "repair_hints": suggestions for fixing code or improving response (MUST be "" when passed=true)\n'
+        '  "pass_reasons": concise list of why the response passed (2-4 items when passed=true, empty when passed=false)\n'
+        '  "critique_status": "completed"\n\n'
         "Set passed=true only for severity=success. Set passed=false for all revision or fail outcomes.\n\n"
         "Severity guide:\n"
         "- success: correct and no repair needed\n"
@@ -91,10 +93,17 @@ def _build_standard_critique_prompt(state: AgentState) -> str:
         '  "passed": true/false\n'
         '  "issues": list of identified problems (empty if passed)\n'
         '  "severity": "success", "minor_revision", "major_revision", or "fail"\n'
-        '  "repair_hints": suggestions for improvement (empty if passed)\n\n'
+        '  "repair_hints": suggestions for improvement (MUST be "" when passed=true)\n'
+        '  "pass_reasons": concise list of why the response passed (2-4 items when passed=true, empty when passed=false)\n'
+        '  "critique_status": "completed"\n\n'
         "Set passed=true only for severity=success. Set passed=false for all revision or fail outcomes.\n\n"
         "Respond ONLY with the JSON object, wrapped in ```json ```."
     )
+
+
+def _to_critique_result(decision: CritiqueDecision) -> CritiqueResult:
+    """Convert validated schema object to the workflow state type."""
+    return decision.model_dump()
 
 
 def critique_response(state: AgentState) -> CritiqueResult:
@@ -106,17 +115,17 @@ def critique_response(state: AgentState) -> CritiqueResult:
     - Tool/code execution: successful execution, correct answer, clear formatting
 
     Returns:
-    CritiqueResult dict with passed, issues, severity, repair_hints.
+    CritiqueResult dict with passed, issues, severity, repair_hints,
+    pass_reasons, and critique_status.
     """
     settings = get_settings()
     if settings.llm_provider.lower() == "openrouter" and not settings.openrouter_api_key:
-        # If no key, assume response is acceptable (safe fallback).
-        return {
-            "passed": True,
-            "issues": [],
-            "severity": "success",
-            "repair_hints": "",
-        }
+        # If no key, accept with explicit skipped status.
+        return _to_critique_result(
+            CritiqueDecision.skipped_config(
+                "Critique step was skipped because OpenRouter API key is missing."
+            )
+        )
 
     # Check if this was a tool-based response
     tool_result = state.get("tool_result")
@@ -128,16 +137,19 @@ def critique_response(state: AgentState) -> CritiqueResult:
         
         # Quick fail check: if tool execution failed, mark as failed immediately
         if not tool_result.get("success", True):
-            return {
-                "passed": False,
-                "issues": ["Code execution failed", tool_result.get("error", "Unknown error")],
-                "severity": "fail",
-                "repair_hints": (
-                    f"The previous code raised an error. "
-                    f"Fix the following issue: {tool_result.get('error', 'Unknown error')}. "
-                    f"Common fixes: check column names, handle NaN values, use correct pandas methods."
-                ),
-            }
+            return _to_critique_result(
+                CritiqueDecision(
+                    passed=False,
+                    issues=["Code execution failed", tool_result.get("error", "Unknown error")],
+                    severity="fail",
+                    repair_hints=(
+                        f"The previous code raised an error. "
+                        f"Fix the following issue: {tool_result.get('error', 'Unknown error')}. "
+                        f"Common fixes: check column names, handle NaN values, use correct pandas methods."
+                    ),
+                    critique_status="completed",
+                )
+            )
     else:
         prompt = _build_standard_critique_prompt(state)
 
@@ -148,12 +160,7 @@ def critique_response(state: AgentState) -> CritiqueResult:
             structured_output_schema=CritiqueDecision,
         )
         result = model.invoke(prompt)
-        return result_to_model(result, CritiqueDecision).model_dump()
+        return _to_critique_result(result_to_model(result, CritiqueDecision))
     except Exception as exc:  # noqa: BLE001 - robust fallback on any error
-        # If critique fails, assume response is acceptable (safe fallback).
-        return {
-            "passed": True,
-            "issues": [],
-            "severity": "success",
-            "repair_hints": f"Critique unavailable: {exc}",
-        }
+        # If critique fails, accept with explicit fallback status.
+        return _to_critique_result(CritiqueDecision.fallback_error(str(exc)))
