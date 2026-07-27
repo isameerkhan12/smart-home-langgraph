@@ -28,6 +28,7 @@ from smart_home_langgraph.evaluation.metrics import EpisodeRecord
 from smart_home_langgraph.graph.state import AgentState, CritiqueResult, ToolExecutionResult
 from smart_home_langgraph.memory.ltm_schema import MemoryType
 from smart_home_langgraph.services.critique_client import critique_response
+from smart_home_langgraph.services.planner_client import evaluate_memory_sufficiency
 from smart_home_langgraph.services.response_client import generate_response, generate_tool_enabled_response
 from smart_home_langgraph.services.summary_client import summarize_messages
 from smart_home_langgraph.services.memory_extractor import extract_structured_memories
@@ -98,6 +99,10 @@ def initial_state(
         "memory_context": "",
         "error_memory_context": "",
         "error_signature": "",
+        # Planner decision
+        "use_memory_only": False,
+        "planner_reason": "",
+        # Response
         "response": "",
         "used_live_llm": False,
         # Tool execution state
@@ -217,6 +222,19 @@ def build_workflow(
             memory_context = format_memories_for_prompt(memories)
         return {**state, "memory_context": memory_context}
 
+    def planner_node(state: AgentState) -> AgentState:
+        """
+        Decide whether memory is sufficient to answer the question.
+        
+        Sets use_memory_only=True to skip tool binding in generate_response_node.
+        """
+        decision = evaluate_memory_sufficiency(state)
+        return {
+            **state,
+            "use_memory_only": decision.use_memory,
+            "planner_reason": decision.reason,
+        }
+
     def retrieve_error_memory_node(state: AgentState,config: RunnableConfig | None = None,*,store: BaseStore | None = None,) -> AgentState:
         """Retrieve error-specific memories using failed tool execution context."""
         tool_result = state.get("tool_result")
@@ -251,16 +269,21 @@ def build_workflow(
         """
         Generate response using the configured LLM.
         
-        When tools are available, uses bind_tools and lets the LLM
-        autonomously decide whether to call tools or respond directly.
+        If planner decided memory is sufficient (use_memory_only=True),
+        generates response WITHOUT tools bound — LLM cannot call tools.
+        Otherwise, binds tools and lets LLM decide autonomously.
         """
+        # Planner decided memory is sufficient — generate without tools
+        if state.get("use_memory_only", False):
+            response_text, used_live_llm = response_gen(state)
+            return {**state, "response": response_text, "used_live_llm": used_live_llm}
+
+        # Tools available and planner says computation needed — bind tools
         if available_tools:
-            # LLM with tools bound - it decides autonomously whether to use them
             llm_response = generate_tool_enabled_response(state, available_tools)
             
             if llm_response.tool_calls:
                 # LLM chose to use a tool
-                # PythonAstREPLTool uses 'query' as the argument name for code
                 tool_args = llm_response.tool_calls[0].get("args", {})
                 code = tool_args.get("query") or tool_args.get("code", "")
                 return {
@@ -271,7 +294,6 @@ def build_workflow(
                 }
             else:
                 # LLM chose to respond directly (no tools needed)
-                # Still add AIMessage to messages so tools_condition can route correctly
                 return {
                     **state,
                     "messages": [llm_response],
@@ -415,6 +437,8 @@ def build_workflow(
         For tool-based queries, this includes code repair hints.
         Appends repair instructions to the original query so the generator
         knows what to fix. Increments repair_count for loop termination.
+        
+        Respects use_memory_only flag from planner — if True, repairs without tools.
         """
         tool_result = state.get("tool_result")
         
@@ -437,12 +461,21 @@ def build_workflow(
         
         repair_state = {**state, "user_query": state["user_query"] + hints}
         
-        # Regenerate with tools if available (LLM decides autonomously)
+        # Respect planner decision — if memory-only, repair without tools
+        if state.get("use_memory_only", False):
+            response_text, used_live_llm = response_gen(repair_state)
+            return {
+                **state,
+                "response": response_text,
+                "used_live_llm": used_live_llm or state["used_live_llm"],
+                "repair_count": state["repair_count"] + 1,
+            }
+        
+        # Tools allowed — regenerate with tools bound
         if available_tools:
             llm_response = generate_tool_enabled_response(repair_state, available_tools)
             
             if llm_response.tool_calls:
-                # PythonAstREPLTool uses 'query' as the argument name for code
                 tool_args = llm_response.tool_calls[0].get("args", {})
                 code = tool_args.get("query") or tool_args.get("code", "")
                 return {
@@ -453,7 +486,6 @@ def build_workflow(
                     "repair_count": state["repair_count"] + 1,
                 }
             else:
-                # Still add AIMessage to messages so tools_condition can route correctly
                 return {
                     **state,
                     "messages": [llm_response],
@@ -625,6 +657,7 @@ def build_workflow(
     # Add all nodes
     graph.add_node("detect_intent", detect_intent)
     graph.add_node("retrieve_context", retrieve_context)
+    graph.add_node("planner", planner_node)
     graph.add_node("summarize", summarize_node)
     graph.add_node("generate_response", generate_response_node)
     graph.add_node("tools", tool_node)
@@ -640,20 +673,23 @@ def build_workflow(
     graph.set_entry_point("detect_intent")
     graph.add_edge("detect_intent", "retrieve_context")
 
-    # Conditional summarization
+    # Conditional summarization: routes to summarize or directly to planner
     graph.add_conditional_edges(
         "retrieve_context",
         should_summarize,
-        {"summarize": "summarize", "continue": "generate_response"},
+        {"summarize": "summarize", "continue": "planner"},
     )
-    graph.add_edge("summarize", "generate_response")
+    graph.add_edge("summarize", "planner")
+    
+    # Planner decides memory vs tools, then generates response
+    graph.add_edge("planner", "generate_response")
     
     # After generate_response: use tools_condition to route (LLM decides)
     # tools_condition returns "tools" if tool_calls present, END otherwise
     graph.add_conditional_edges(
         "generate_response",
         tools_condition,
-        {"tools": "tools", END: "critique_response"}, # Returns END (literal "__end__") → if no tool_calls
+        {"tools": "tools", END: "critique_response"},
     )
     
     # After tool execution, process the result

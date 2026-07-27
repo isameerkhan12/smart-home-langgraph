@@ -9,6 +9,13 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 
+class PlannerDecision(BaseModel):
+    """Decision from planner: use memory or tools?"""
+
+    use_memory: bool = Field(description="True if memory is sufficient to answer the question")
+    reason: str = Field(description="Brief explanation for the decision")
+
+
 class CritiqueDecision(BaseModel):
     """Validated critique payload from model output."""
 
