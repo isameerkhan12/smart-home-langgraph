@@ -99,7 +99,7 @@ def initial_state(
         "memory_context": "",
         "error_memory_context": "",
         "error_signature": "",
-        # Planner decision
+        # Memory evaluator decision
         "use_memory_only": False,
         "planner_reason": "",
         # Response
@@ -222,7 +222,7 @@ def build_workflow(
             memory_context = format_memories_for_prompt(memories)
         return {**state, "memory_context": memory_context}
 
-    def planner_node(state: AgentState) -> AgentState:
+    def memory_evaluator_node(state: AgentState) -> AgentState:
         """
         Decide whether memory is sufficient to answer the question.
         
@@ -269,16 +269,16 @@ def build_workflow(
         """
         Generate response using the configured LLM.
         
-        If planner decided memory is sufficient (use_memory_only=True),
+        If memory evaluator decided memory is sufficient (use_memory_only=True),
         generates response WITHOUT tools bound — LLM cannot call tools.
         Otherwise, binds tools and lets LLM decide autonomously.
         """
-        # Planner decided memory is sufficient — generate without tools
+        # Memory evaluator decided memory is sufficient — generate without tools
         if state.get("use_memory_only", False):
             response_text, used_live_llm = response_gen(state)
             return {**state, "response": response_text, "used_live_llm": used_live_llm}
 
-        # Tools available and planner says computation needed — bind tools
+        # Tools available and memory evaluator says computation needed — bind tools
         if available_tools:
             llm_response = generate_tool_enabled_response(state, available_tools)
             
@@ -438,7 +438,7 @@ def build_workflow(
         Appends repair instructions to the original query so the generator
         knows what to fix. Increments repair_count for loop termination.
         
-        Respects use_memory_only flag from planner — if True, repairs without tools.
+        Respects use_memory_only flag from memory evaluator — if True, repairs without tools.
         """
         tool_result = state.get("tool_result")
         
@@ -461,7 +461,7 @@ def build_workflow(
         
         repair_state = {**state, "user_query": state["user_query"] + hints}
         
-        # Respect planner decision — if memory-only, repair without tools
+        # Respect memory evaluator decision — if memory-only, repair without tools
         if state.get("use_memory_only", False):
             response_text, used_live_llm = response_gen(repair_state)
             return {
@@ -657,7 +657,7 @@ def build_workflow(
     # Add all nodes
     graph.add_node("detect_intent", detect_intent)
     graph.add_node("retrieve_context", retrieve_context)
-    graph.add_node("planner", planner_node)
+    graph.add_node("memory_evaluator", memory_evaluator_node)
     graph.add_node("summarize", summarize_node)
     graph.add_node("generate_response", generate_response_node)
     graph.add_node("tools", tool_node)
@@ -673,16 +673,16 @@ def build_workflow(
     graph.set_entry_point("detect_intent")
     graph.add_edge("detect_intent", "retrieve_context")
 
-    # Conditional summarization: routes to summarize or directly to planner
+    # Conditional summarization: routes to summarize or directly to memory evaluator
     graph.add_conditional_edges(
         "retrieve_context",
         should_summarize,
-        {"summarize": "summarize", "continue": "planner"},
+        {"summarize": "summarize", "continue": "memory_evaluator"},
     )
-    graph.add_edge("summarize", "planner")
+    graph.add_edge("summarize", "memory_evaluator")
     
-    # Planner decides memory vs tools, then generates response
-    graph.add_edge("planner", "generate_response")
+    # Memory evaluator decides memory vs tools, then generates response
+    graph.add_edge("memory_evaluator", "generate_response")
     
     # After generate_response: use tools_condition to route (LLM decides)
     # tools_condition returns "tools" if tool_calls present, END otherwise

@@ -84,9 +84,6 @@ class AgentState(TypedDict):
     intent: str
 
     # ---- Context (populated by retrieve_context node) ----------------------
-    # Short text summary of recent telemetry data from structured store.
-    sensor_context: str
-
     # Long-term memory context assembled from mistakes, recipes, preferences.
     memory_context: str
 
@@ -96,11 +93,11 @@ class AgentState(TypedDict):
     # Normalized error signature used for deduping and retrieval.
     error_signature: str
 
-    # ---- Planner decision (populated by planner node) ----------------------
-    # True when planner decides memory is sufficient; tools will not be bound.
+    # ---- Planner decision (populated by memory_evaluator node) --------------
+    # True when memory evaluator decides memory is sufficient; tools will not be bound.
     use_memory_only: bool
 
-    # Explanation from planner for the decision.
+    # Explanation from memory evaluator for the decision.
     planner_reason: str
 
     # ---- Response (populated by generate_response / repair_response nodes) --

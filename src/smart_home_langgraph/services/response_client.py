@@ -65,27 +65,23 @@ def _build_prompt_messages(state: AgentState, max_tokens: int = 2000) -> list:
         f"Detected Intent:\n{state['intent']}\n\n"
         f"Memory Context:\n{state['memory_context']}\n\n"
     )
-    # Include summary if it exists (from previous message summarization)
-    if state.get("summary"):
-        system_content += f"[CONVERSATION SUMMARY]\n{state['summary']}\n\n"
+    # STM (short-term message history) disabled: this is a data analysis agent, not a chatbot.
+    # LTM + memory evaluator cover the memory use case. Re-enable if follow-up conversational context is needed.
+    # if state.get("summary"):
+    #     system_content += f"[CONVERSATION SUMMARY]\n{state['summary']}\n\n"
 
     system_content += "Return a concise actionable answer in 4-6 bullet points."
 
     system_message = SystemMessage(content=system_content)
-    # Filter out tool-related messages to avoid provider sequencing errors,
-    # then trim conversation history to fit within token budget.
-    filtered_messages = _filter_tool_messages(state["messages"])
-    trimmed_history = trim_messages(
-        filtered_messages,
-        strategy="last",
-        token_counter=count_tokens_approximately,
-        max_tokens=max_tokens,
-    )
-    print(
-        f"Prompt token count (approx): "
-        f"{count_tokens_approximately([system_message] + trimmed_history) + count_tokens_approximately([HumanMessage(content=state['user_query'])])}"
-    )
-    return [system_message, *trimmed_history, HumanMessage(content=state["user_query"])]
+    # filtered_messages = _filter_tool_messages(state["messages"])
+    # trimmed_history = trim_messages(
+    #     filtered_messages,
+    #     strategy="last",
+    #     token_counter=count_tokens_approximately,
+    #     max_tokens=max_tokens,
+    # )
+    # return [system_message, *trim_messages, HumanMessage(content=state["user_query"])]
+    return [system_message, HumanMessage(content=state["user_query"])]
 
 
 def _fallback_response(state: AgentState, reason: str) -> str:
@@ -148,36 +144,36 @@ def _build_tool_prompt_messages(state: AgentState, max_tokens: int = 2000) -> li
         "- Bandwidth: Network bandwidth\n"
         "- timestamp: Datetime version of Unix_Timestamp\n\n"
         "When the user asks a data analysis question:\n"
-        "1. Use the python_repl tool to write and execute pandas code\n"
-        "2. Always print() the final result\n"
-        "3. Use proper pandas methods (mean(), sum(), value_counts(), etc.)\n"
-        "4. Handle potential errors gracefully\n\n"
+        "1. FIRST read the Memory Context below. For any numeric fact already present\n"
+        "   (e.g. 'Washing Machine March 2014 = 7.36 kWh'), assign it as a Python variable\n"
+        "   at the top of your code (e.g. washing_machine_kwh = 7.36) and use that\n"
+        "   variable in your calculation — do NOT recompute it from the DataFrame.\n"
+        "2. Only query the DataFrame for values that are NOT in memory.\n"
+        "3. Always print() the final result.\n"
+        "4. Use proper pandas methods (mean(), sum(), value_counts(), etc.).\n"
+        "5. Handle potential errors gracefully.\n\n"
         f"Detected Intent: {state['intent']}\n\n"
     )
-    
-    # Add context if available
-    if state.get("sensor_context"):
-        system_content += f"Recent Sensor Summary:\n{state['sensor_context']}\n\n"
-    
+
+    # Memory context is injected before sensor context so it appears closest to the instructions above.
     if state.get("memory_context"):
         system_content += f"Memory Context:\n{state['memory_context']}\n\n"
-    
-    if state.get("summary"):
-        system_content += f"[CONVERSATION SUMMARY]\n{state['summary']}\n\n"
-    
+
+    # STM (short-term message history) disabled: LTM + memory evaluator cover the memory use case.
+    # Re-enable if follow-up conversational context is needed.
+    # if state.get("summary"):
+    #     system_content += f"[CONVERSATION SUMMARY]\n{state['summary']}\n\n"
+    # filtered_messages = _filter_tool_messages(state["messages"])
+    # trimmed_history = trim_messages(
+    #     filtered_messages,
+    #     strategy="last",
+    #     token_counter=count_tokens_approximately,
+    #     max_tokens=max_tokens,
+    # )
+    # return [system_message, *trimmed_history, HumanMessage(content=state["user_query"])]
+
     system_message = SystemMessage(content=system_content)
-    
-    # Filter out tool-related messages to avoid provider sequencing errors,
-    # then trim conversation history.
-    filtered_messages = _filter_tool_messages(state["messages"])
-    trimmed_history = trim_messages(
-        filtered_messages,
-        strategy="last",
-        token_counter=count_tokens_approximately,
-        max_tokens=max_tokens,
-    )
-    
-    return [system_message, *trimmed_history, HumanMessage(content=state["user_query"])]
+    return [system_message, HumanMessage(content=state["user_query"])]
 
 
 def generate_response_with_tools(

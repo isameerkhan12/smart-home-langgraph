@@ -10,7 +10,7 @@ flowchart TD
     subgraph context["Context Preparation"]
         C --> D{should_summarize?}
         D -->|"> 6 messages"| E[summarize]
-        D -->|"≤ 6 messages"| P[planner]
+        D -->|"≤ 6 messages"| P[memory_evaluator]
         E --> P
     end
 
@@ -42,9 +42,9 @@ flowchart TD
     end
 ```
 
-## Planner Node
+## Memory Evaluator Node
 
-The **planner** node decides whether memory is sufficient to answer the user's question:
+The **memory_evaluator** node decides whether memory is sufficient to answer the user's question:
 
 - **`use_memory_only = true`**: Memory contains the answer → `generate_response` and `repair_response` run **without tools bound** (LLM physically cannot call `python_repl`)
 - **`use_memory_only = false`**: Computation needed → `generate_response` and `repair_response` run **with tools bound** (LLM can call `python_repl`)
@@ -54,7 +54,7 @@ This prevents redundant tool calls when the answer already exists in long-term m
 ## Notes
 
 - Entry point: `detect_intent`.
-- Planner gates tool access based on memory sufficiency.
+- Memory evaluator gates tool access based on memory sufficiency.
 - Tool execution is optional and controlled by `tools_condition`.
 - Critique-repair loop exits to `memory_writer` on pass or max repair exhaustion.
 - If tool failure persists at max repairs, flow writes to `error_memory_writer` before ending.
