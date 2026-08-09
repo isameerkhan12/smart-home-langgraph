@@ -95,12 +95,12 @@ def initial_state(
         "messages": list(messages or []),
         "summary": "",
         "intent": "",
-        "sensor_context": "",
         "memory_context": "",
         "error_memory_context": "",
         "error_signature": "",
         # Memory evaluator decision
-        "use_memory_only": False,
+        "tools_usage": True,
+        "memory_usage_mode": "none",
         "planner_reason": "",
         # Response
         "response": "",
@@ -226,12 +226,13 @@ def build_workflow(
         """
         Decide whether memory is sufficient to answer the question.
         
-        Sets use_memory_only=True to skip tool binding in generate_response_node.
+        Sets tools_usage flag and memory_usage_mode for downstream routing.
         """
         decision = evaluate_memory_sufficiency(state)
         return {
             **state,
-            "use_memory_only": decision.use_memory,
+            "tools_usage": decision.tools_usage,
+            "memory_usage_mode": decision.memory_usage_mode,
             "planner_reason": decision.reason,
         }
 
@@ -269,16 +270,16 @@ def build_workflow(
         """
         Generate response using the configured LLM.
         
-        If memory evaluator decided memory is sufficient (use_memory_only=True),
+        If memory evaluator decides tools are not needed,
         generates response WITHOUT tools bound — LLM cannot call tools.
         Otherwise, binds tools and lets LLM decide autonomously.
         """
-        # Memory evaluator decided memory is sufficient — generate without tools
-        if state.get("use_memory_only", False):
+        # Memory-only path: tools are not bound.
+        if not state.get("tools_usage", True):
             response_text, used_live_llm = response_gen(state)
             return {**state, "response": response_text, "used_live_llm": used_live_llm}
 
-        # Tools available and memory evaluator says computation needed — bind tools
+        # Tool-usage path: tools are bound for missing or new computation.
         if available_tools:
             llm_response = generate_tool_enabled_response(state, available_tools)
             
@@ -438,7 +439,7 @@ def build_workflow(
         Appends repair instructions to the original query so the generator
         knows what to fix. Increments repair_count for loop termination.
         
-        Respects use_memory_only flag from memory evaluator — if True, repairs without tools.
+        Respects tools_usage flag from memory evaluator.
         """
         tool_result = state.get("tool_result")
         
@@ -461,8 +462,8 @@ def build_workflow(
         
         repair_state = {**state, "user_query": state["user_query"] + hints}
         
-        # Respect memory evaluator decision — if memory-only, repair without tools
-        if state.get("use_memory_only", False):
+        # Memory-only path: repair without tools.
+        if not state.get("tools_usage", True):
             response_text, used_live_llm = response_gen(repair_state)
             return {
                 **state,

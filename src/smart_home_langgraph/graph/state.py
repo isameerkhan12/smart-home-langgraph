@@ -16,7 +16,7 @@
 # ---------------------------------------------------------------------------
 from __future__ import annotations
 
-from typing import Annotated, TypedDict
+from typing import Annotated, Literal, TypedDict
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
@@ -94,8 +94,11 @@ class AgentState(TypedDict):
     error_signature: str
 
     # ---- Planner decision (populated by memory_evaluator node) --------------
-    # True when memory evaluator decides memory is sufficient; tools will not be bound.
-    use_memory_only: bool
+    # True when tools should be bound and available to the generation path.
+    tools_usage: bool
+
+    # Memory coverage mode decided by evaluator: memory_only, partial, or none.
+    memory_usage_mode: Literal["memory_only", "partial", "none"]
 
     # Explanation from memory evaluator for the decision.
     planner_reason: str

@@ -153,6 +153,7 @@ def _build_tool_prompt_messages(state: AgentState, max_tokens: int = 2000) -> li
         "4. Use proper pandas methods (mean(), sum(), value_counts(), etc.).\n"
         "5. Handle potential errors gracefully.\n\n"
         f"Detected Intent: {state['intent']}\n\n"
+        f"Memory Usage Mode: {state.get('memory_usage_mode', 'none')}\n\n"
     )
 
     # Memory context is injected before sensor context so it appears closest to the instructions above.

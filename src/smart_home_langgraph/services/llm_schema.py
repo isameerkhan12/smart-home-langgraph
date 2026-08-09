@@ -10,10 +10,22 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class PlannerDecision(BaseModel):
-    """Decision from planner: use memory or tools?"""
+    """Decision from memory evaluator: tool usage + memory coverage mode."""
 
-    use_memory: bool = Field(description="True if memory is sufficient to answer the question")
+    tools_usage: bool = Field(description="True when tools should be used for this question")
+    memory_usage_mode: Literal["memory_only", "partial", "none"] = Field(
+        description="How much the answer can rely on memory: memory_only, partial, or none"
+    )
     reason: str = Field(description="Brief explanation for the decision")
+
+    @model_validator(mode="after")
+    def enforce_consistency(self) -> "PlannerDecision":
+        """Keep tool-usage flag and memory mode internally consistent."""
+        if self.memory_usage_mode == "memory_only":
+            self.tools_usage = False
+        else:
+            self.tools_usage = True
+        return self
 
 
 class CritiqueDecision(BaseModel):

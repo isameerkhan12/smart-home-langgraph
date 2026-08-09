@@ -22,15 +22,22 @@ You are a planning assistant. Your job is to decide whether the user's question 
 can be fully answered using ONLY the provided memory context, or if computation/tools are needed.
 
 Guidelines:
-- Answer YES if memory contains the specific values, facts, or conclusions needed to answer.
-- Answer YES if memory contains a semantically equivalent answer (same question, same data).
-- Answer NO if the question requires new calculations, aggregations, or data lookups not in memory.
-- Answer NO if memory is empty, irrelevant, or only contains partial information.
-- Answer NO if user explicitly asks to recalculate, verify, or recompute.
+- Select memory_only when memory contains the specific values, facts, or conclusions needed.
+- Select memory_only when memory contains a semantically equivalent answer (same question, same data).
+- Select partial when memory contains some required values but not all values needed to finish the answer.
+- Select none when memory is empty, irrelevant, or missing key facts required for the answer.
+- If the user explicitly asks to recalculate, verify, or recompute, avoid memory_only.
+- Be conservative: if uncertain whether memory is sufficient, choose partial or none.
+
+Mode mapping:
+- memory_only -> tools_usage=false
+- partial -> tools_usage=true
+- none -> tools_usage=true
 
 Respond with a JSON object:
 {
-  "use_memory": true/false,
+    "tools_usage": true/false,
+    "memory_usage_mode": "memory_only" | "partial" | "none",
   "reason": "brief explanation (1 sentence)"
 }
 
@@ -62,7 +69,7 @@ def evaluate_memory_sufficiency(state: AgentState) -> PlannerDecision:
         state: AgentState with user_query and memory_context populated.
 
     Returns:
-        PlannerDecision with use_memory (bool) and reason (str).
+        PlannerDecision with tools_usage (bool), memory_usage_mode, and reason.
     """
     settings = get_settings()
 
@@ -70,14 +77,16 @@ def evaluate_memory_sufficiency(state: AgentState) -> PlannerDecision:
     memory_context = state.get("memory_context", "")
     if not memory_context or "No relevant long-term memories found" in memory_context:
         return PlannerDecision(
-            use_memory=False,
+            tools_usage=True,
+            memory_usage_mode="none",
             reason="No relevant memory available; tools needed for computation.",
         )
 
     # Fallback: if API key missing, default to using memory to avoid tool errors
     if _requires_provider_api_key(settings) and not settings.openrouter_api_key:
         return PlannerDecision(
-            use_memory=True,
+            tools_usage=False,
+            memory_usage_mode="memory_only",
             reason="API key missing; defaulting to memory-based response.",
         )
 
@@ -90,6 +99,7 @@ def evaluate_memory_sufficiency(state: AgentState) -> PlannerDecision:
     except Exception as exc:  # noqa: BLE001 - robust fallback on any error
         # On error, default to tools (safer to compute than give wrong answer)
         return PlannerDecision(
-            use_memory=False,
+            tools_usage=True,
+            memory_usage_mode="none",
             reason=f"Planner error ({exc}); defaulting to tools.",
         )
