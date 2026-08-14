@@ -18,12 +18,19 @@ from smart_home_langgraph.services.model_factory import build_model
 
 
 def _build_shared_critique_prompt(state: AgentState) -> str:
-    """Build the shared critique context used by both prompt variants."""
-    return (
+    """Build the shared critique context used by all prompt variants."""
+    memory_usage_mode = state.get("memory_usage_mode", "none")
+    memory_context = state.get("memory_context", "")
+
+    shared = (
         f"User Query:\n{state['user_query']}\n\n"
         f"Detected Intent:\n{state['intent']}\n\n"
-        f"Response to Evaluate:\n{state['response']}\n\n"
+        f"Memory Usage Mode: {memory_usage_mode}\n\n"
     )
+    if memory_context and "No relevant" not in memory_context and "No long-term" not in memory_context:
+        shared += f"Retrieved Memory Context:\n{memory_context}\n\n"
+    shared += f"Response to Evaluate:\n{state['response']}\n\n"
+    return shared
 
 
 def _build_code_critique_prompt(state: AgentState) -> str:
@@ -101,6 +108,39 @@ def _build_standard_critique_prompt(state: AgentState) -> str:
     )
 
 
+def _build_memory_critique_prompt(state: AgentState) -> str:
+    """Build a critique prompt for memory-only responses."""
+    return (
+        "You are a strict evaluator for smart-home energy data analysis responses.\n\n"
+        "Context: The retrieved memory was produced by a prior agent run and has already been checked by a critique node.\n"
+        # "Treat all memory values as the authoritative ground truth. Your only job is to verify that the response faithfully reflects them.\n\n"
+        "Checks (all required):\n"
+        "  1. Grounding — every value or claim in the response must appear explicitly in the memory.\n"
+        "  2. Numerical accuracy — numbers must match memory exactly.\n"
+        "  3. Logical integrity — reasoning, units, and conclusions must be coherent with the memory facts.\n"
+        "  4. Task alignment — the response must address the original question.\n\n"
+        f"{_build_shared_critique_prompt(state)}"
+        "Return a JSON object:\n"
+        '  "passed": true | false\n'
+        '  "issues": list of problems (empty if passed)\n'
+        '  "severity": "success" | "minor_revision" | "major_revision" | "fail"\n'
+        '  "repair_hints": fix instructions ("" when passed=true)\n'
+        '  "pass_reasons": 2–4 verification statements (empty when passed=false).\n'
+        '    State what was confirmed and that it matched — e.g. "reported value 0.0036 kWh matches memory exactly".\n'
+        '    Do NOT write "as mentioned in memory" or "according to the context".\n'
+        '  "critique_status": "completed"\n\n'
+        "Rules:\n"
+        "- passed=true only when severity=success.\n"
+        "- passed=false for minor_revision, major_revision, and fail.\n\n"
+        "Severity guide:\n"
+        "  success        — all values grounded and numerically accurate\n"
+        "  minor_revision — mostly correct but one detail is missing or imprecise\n"
+        "  major_revision — a key value is absent or inconsistent with memory\n"
+        "  fail           — response fabricates content or directly contradicts memory\n\n"
+        "Respond ONLY with the JSON object wrapped in ```json ```.\n"
+    )
+
+
 def _to_critique_result(decision: CritiqueDecision) -> CritiqueResult:
     """Convert validated schema object to the workflow state type."""
     return decision.model_dump()
@@ -127,16 +167,16 @@ def critique_response(state: AgentState) -> CritiqueResult:
             )
         )
 
-    # Check if this was a tool-based response
     tool_result = state.get("tool_result")
-    has_tool_execution = tool_result is not None
-    
-    # Use appropriate prompt based on response type
-    if has_tool_execution:
+    memory_usage_mode = state.get("memory_usage_mode", "none")
+
+    # Route to prompt matching the evidence available for this response.
+    if memory_usage_mode == "memory_only":
+        prompt = _build_memory_critique_prompt(state)
+    else:
+        # none or partial: tool was used; quick-fail on execution error first.
         prompt = _build_code_critique_prompt(state)
-        
-        # Quick fail check: if tool execution failed, mark as failed immediately
-        if not tool_result.get("success", True):
+        if tool_result and not tool_result.get("success", True):
             return _to_critique_result(
                 CritiqueDecision(
                     passed=False,
@@ -150,8 +190,6 @@ def critique_response(state: AgentState) -> CritiqueResult:
                     critique_status="completed",
                 )
             )
-    else:
-        prompt = _build_standard_critique_prompt(state)
 
     try:
         model = build_model(
