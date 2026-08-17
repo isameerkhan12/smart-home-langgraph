@@ -16,7 +16,7 @@
 # ---------------------------------------------------------------------------
 from __future__ import annotations
 
-from typing import Annotated, Literal, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
@@ -60,6 +60,9 @@ class CritiqueResult(TypedDict):
 
     # Why the response was accepted (empty when not passed).
     pass_reasons: list[str]
+
+    # True when repair should ignore retrieved memory and recompute from tools.
+    force_full_recompute: NotRequired[bool]
 
     # Critique execution status for observability/debugging.
     # Values: "not_run", "completed", "skipped_config", "fallback_error".

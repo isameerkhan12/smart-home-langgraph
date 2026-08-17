@@ -36,6 +36,7 @@ class CritiqueDecision(BaseModel):
     severity: Literal["success", "minor_revision", "major_revision", "fail"] = "success"
     repair_hints: str = ""
     pass_reasons: list[str] = Field(default_factory=list)
+    force_full_recompute: bool = False
     critique_status: Literal["not_run", "completed", "skipped_config", "fallback_error"] = "completed"
 
     @model_validator(mode="after")
@@ -43,6 +44,7 @@ class CritiqueDecision(BaseModel):
         """Keep critique fields internally consistent."""
         if self.passed:
             self.repair_hints = ""
+            self.force_full_recompute = False
             if not self.pass_reasons:
                 self.pass_reasons = [
                     "Response met the required quality checks.",

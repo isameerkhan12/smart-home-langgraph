@@ -116,6 +116,7 @@ def initial_state(
             "severity": "minor_revision",
             "repair_hints": "",
             "pass_reasons": [],
+            "force_full_recompute": False,
             "critique_status": "not_run",
         },
         "repair_count": 0,
@@ -460,16 +461,25 @@ def build_workflow(
                 "Please provide an improved response."
             )
         
-        repair_state = {**state, "user_query": state["user_query"] + hints}
+        base_state = state
+        if state["critique_result"].get("force_full_recompute", False):
+            base_state = {
+                **state,
+                "tools_usage": True,
+                "memory_usage_mode": "none",
+                "memory_context": "No relevant long-term memories found.",
+            }
+
+        repair_state = {**base_state, "user_query": state["user_query"] + hints}
         
         # Memory-only path: repair without tools.
-        if not state.get("tools_usage", True):
+        if not base_state.get("tools_usage", True):
             response_text, used_live_llm = response_gen(repair_state)
             return {
-                **state,
+                **base_state,
                 "response": response_text,
-                "used_live_llm": used_live_llm or state["used_live_llm"],
-                "repair_count": state["repair_count"] + 1,
+                "used_live_llm": used_live_llm or base_state["used_live_llm"],
+                "repair_count": base_state["repair_count"] + 1,
             }
         
         # Tools allowed — regenerate with tools bound
@@ -480,27 +490,27 @@ def build_workflow(
                 tool_args = llm_response.tool_calls[0].get("args", {})
                 code = tool_args.get("query") or tool_args.get("code", "")
                 return {
-                    **state,
+                    **base_state,
                     "messages": [llm_response],
                     "used_live_llm": True,
                     "generated_code": code,
-                    "repair_count": state["repair_count"] + 1,
+                    "repair_count": base_state["repair_count"] + 1,
                 }
             else:
                 return {
-                    **state,
+                    **base_state,
                     "messages": [llm_response],
                     "response": llm_response.content or "",
                     "used_live_llm": True,
-                    "repair_count": state["repair_count"] + 1,
+                    "repair_count": base_state["repair_count"] + 1,
                 }
         else:
             response_text, used_live_llm = response_gen(repair_state)
             return {
-                **state,
+                **base_state,
                 "response": response_text,
-                "used_live_llm": used_live_llm or state["used_live_llm"],
-                "repair_count": state["repair_count"] + 1,
+                "used_live_llm": used_live_llm or base_state["used_live_llm"],
+                "repair_count": base_state["repair_count"] + 1,
             }
 
     def memory_writer_node(state: AgentState,config: RunnableConfig | None = None,*,store: BaseStore | None = None,) -> AgentState:

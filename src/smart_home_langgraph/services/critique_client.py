@@ -33,6 +33,23 @@ def _build_shared_critique_prompt(state: AgentState) -> str:
     return shared
 
 
+def _format_tool_execution_context(tool_result: dict | None) -> str:
+    """Format tool execution details for critique prompts."""
+    if not tool_result:
+        return ""
+
+    context = (
+        f"Code Executed:\n```python\n{tool_result.get('tool_input', 'N/A')}\n```\n\n"
+        f"Execution Output:\n{tool_result.get('tool_output', 'N/A')}\n\n"
+        f"Execution Success: {tool_result.get('success', True)}\n\n"
+    )
+
+    if not tool_result.get("success"):
+        context += f"Error Message:\n{tool_result.get('error', 'N/A')}\n\n"
+
+    return context
+
+
 def _build_code_critique_prompt(state: AgentState) -> str:
     """Build a critique prompt for code/tool execution results."""
     tool_result = state.get("tool_result")
@@ -54,15 +71,7 @@ def _build_code_critique_prompt(state: AgentState) -> str:
         f"{_build_shared_critique_prompt(state)}"
     )
     
-    if tool_result:
-        prompt += (
-            f"Code Executed:\n```python\n{tool_result.get('tool_input', 'N/A')}\n```\n\n"
-            f"Execution Output:\n{tool_result.get('tool_output', 'N/A')}\n\n"
-            f"Execution Success: {tool_result.get('success', True)}\n\n"
-        )
-        
-        if not tool_result.get("success"):
-            prompt += f"Error Message:\n{tool_result.get('error', 'N/A')}\n\n"
+    prompt += _format_tool_execution_context(tool_result)
     
     prompt += (
         "Return a JSON object with:\n"
@@ -81,6 +90,52 @@ def _build_code_critique_prompt(state: AgentState) -> str:
         "Respond ONLY with the JSON object, wrapped in ```json ```."
     )
     
+    return prompt
+
+
+def _build_partial_critique_prompt(state: AgentState) -> str:
+    """Build a critique prompt for responses using memory and tool output."""
+    tool_result = state.get("tool_result")
+
+    prompt = (
+        "You are a strict evaluator for smart-home data analysis responses.\n"
+        "Context: The retrieved memory was produced by a prior agent run and has already been checked by a critique node.\n"
+        "This response may combine checked memory with fresh tool execution.\n"
+        "Use memory to evaluate memory-backed claims, and code/output to evaluate tool-backed claims.\n\n"
+        "Checks (all required):\n"
+        "  1. Memory grounding: Memory-backed values or claims must appear explicitly in the retrieved memory.\n"
+        "  2. Memory numerical accuracy: Memory-backed numbers must match memory exactly.\n"
+        "  3. Code plausibility: Executed code must be plausible for the newly computed part of the task.\n"
+        "  4. Execution correctness: Tool execution must succeed without errors.\n"
+        "  5. Tool numerical plausibility: Computed values must be realistic, internally consistent, and match the output.\n"
+        "  6. Source consistency: If memory and tool output describe the same fact, they must not contradict.\n"
+        "  7. Logical correctness: Calculations, units, reasoning, and combined conclusions must be coherent.\n"
+        "  8. Task alignment and clarity: The response must answer the original question; ignore raw tool formatting artifacts.\n\n"
+        "If the retrieved memory is irrelevant, insufficient for the memory-backed claim, misused, or contradicted by tool output, "
+        "set force_full_recompute=true and instruct repair to ignore memory and recompute the full answer from tools.\n\n"
+        f"{_build_shared_critique_prompt(state)}"
+    )
+
+    prompt += _format_tool_execution_context(tool_result)
+
+    prompt += (
+        "Return a JSON object with:\n"
+        '  "passed": true/false\n'
+        '  "issues": list of identified problems (empty if passed)\n'
+        '  "severity": "success", "minor_revision", "major_revision", or "fail"\n'
+        '  "repair_hints": suggestions for fixing code or improving response (MUST be "" when passed=true)\n'
+        '  "pass_reasons": concise list of why the response passed (2-4 items when passed=true, empty when passed=false)\n'
+        '  "force_full_recompute": true only when repair must ignore memory and recompute everything from tools; otherwise false\n'
+        '  "critique_status": "completed"\n\n'
+        "Set passed=true only for severity=success. Set passed=false for all revision or fail outcomes.\n\n"
+        "Severity guide:\n"
+        "- success: memory-backed and computed values are correct and no repair is needed\n"
+        "- minor_revision: mostly correct, but needs a small fix or clarification\n"
+        "- major_revision: significant issues in memory use, computation, reasoning, or answer consistency\n"
+        "- fail: execution failed or the response is fundamentally unsupported\n\n"
+        "Respond ONLY with the JSON object, wrapped in ```json ```."
+    )
+
     return prompt
 
 
@@ -113,7 +168,6 @@ def _build_memory_critique_prompt(state: AgentState) -> str:
     return (
         "You are a strict evaluator for smart-home energy data analysis responses.\n\n"
         "Context: The retrieved memory was produced by a prior agent run and has already been checked by a critique node.\n"
-        # "Treat all memory values as the authoritative ground truth. Your only job is to verify that the response faithfully reflects them.\n\n"
         "Checks (all required):\n"
         "  1. Grounding — every value or claim in the response must appear explicitly in the memory.\n"
         "  2. Numerical accuracy — numbers must match memory exactly.\n"
@@ -128,6 +182,7 @@ def _build_memory_critique_prompt(state: AgentState) -> str:
         '  "pass_reasons": 2–4 verification statements (empty when passed=false).\n'
         '    State what was confirmed and that it matched — e.g. "reported value 0.0036 kWh matches memory exactly".\n'
         '    Do NOT write "as mentioned in memory" or "according to the context".\n'
+        '  "force_full_recompute": false\n'
         '  "critique_status": "completed"\n\n'
         "Rules:\n"
         "- passed=true only when severity=success.\n"
@@ -170,26 +225,29 @@ def critique_response(state: AgentState) -> CritiqueResult:
     tool_result = state.get("tool_result")
     memory_usage_mode = state.get("memory_usage_mode", "none")
 
+    if memory_usage_mode != "memory_only" and tool_result and not tool_result.get("success", True):
+        return _to_critique_result(
+            CritiqueDecision(
+                passed=False,
+                issues=["Code execution failed", tool_result.get("error", "Unknown error")],
+                severity="fail",
+                repair_hints=(
+                    f"The previous code raised an error. "
+                    f"Fix the following issue: {tool_result.get('error', 'Unknown error')}. "
+                    f"Common fixes: check column names, handle NaN values, use correct pandas methods."
+                ),
+                force_full_recompute=False,
+                critique_status="completed",
+            )
+        )
+
     # Route to prompt matching the evidence available for this response.
     if memory_usage_mode == "memory_only":
         prompt = _build_memory_critique_prompt(state)
+    elif memory_usage_mode == "partial":
+        prompt = _build_partial_critique_prompt(state)
     else:
-        # none or partial: tool was used; quick-fail on execution error first.
         prompt = _build_code_critique_prompt(state)
-        if tool_result and not tool_result.get("success", True):
-            return _to_critique_result(
-                CritiqueDecision(
-                    passed=False,
-                    issues=["Code execution failed", tool_result.get("error", "Unknown error")],
-                    severity="fail",
-                    repair_hints=(
-                        f"The previous code raised an error. "
-                        f"Fix the following issue: {tool_result.get('error', 'Unknown error')}. "
-                        f"Common fixes: check column names, handle NaN values, use correct pandas methods."
-                    ),
-                    critique_status="completed",
-                )
-            )
 
     try:
         model = build_model(
