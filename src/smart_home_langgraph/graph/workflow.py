@@ -32,7 +32,7 @@ from smart_home_langgraph.services.planner_client import evaluate_memory_suffici
 from smart_home_langgraph.services.response_client import generate_response, generate_tool_enabled_response
 from smart_home_langgraph.services.summary_client import summarize_messages
 from smart_home_langgraph.services.memory_extractor import extract_structured_memories
-from smart_home_langgraph.tools.python_executor import get_smart_home_tools
+from smart_home_langgraph.tools.python_executor import get_smart_home_tools, submit_final_answer
 
 # Type aliases for injectable callables (used for dependency injection in tests).
 ResponseGenerator = Callable[[AgentState], tuple[str, bool]]
@@ -151,8 +151,8 @@ def build_workflow(
                           Default: generate_response (real provider call).
       critique_generator  Callable that returns a CritiqueResult dict.
                           Default: critique_response (real Gemini critique).
-      checkpointer        LangGraph checkpointer for persistent chat state.
-                          Default: no checkpointing.
+    checkpointer        LangGraph checkpointer for persistent chat state.
+                  Default: no checkpointing.
       store               LangGraph BaseStore for long-term memory.
                           Default: no persistent store.
       max_repairs         Maximum repair loop iterations. Default: 2.
@@ -163,6 +163,8 @@ def build_workflow(
     
     # Initialize tools for data analysis
     available_tools = list(tools) if tools else get_smart_home_tools()
+    if not any(tool.name == submit_final_answer.name for tool in available_tools):
+        available_tools.append(submit_final_answer)
     tool_node = ToolNode(tools=available_tools)
 
     # Memory namespace layout: (app, entity, user_id, collection)
@@ -350,7 +352,9 @@ def build_workflow(
         )
 
         # Build response based on tool type
-        if tool_name == "python_repl":
+        if tool_name == "submit_final_answer":
+            response = formatted_output
+        elif tool_name == "python_repl":
             if success:
                 response = (
                     f"Based on my analysis of the smart home data:\n\n"
@@ -376,6 +380,12 @@ def build_workflow(
             "tool_result": tool_result,
             "tool_execution_count": state.get("tool_execution_count", 0) + 1,
         }
+
+    def route_after_tool_result(state: AgentState) -> Literal["generate_response", "critique_response"]:
+        """Critique only after the model explicitly submits its final answer."""
+        if state.get("tool_result", {}).get("tool_name") == "submit_final_answer":
+            return "critique_response"
+        return "generate_response"
 
     def record_turn(state: AgentState) -> AgentState:
         """Append the completed user/assistant turn to chat history."""
@@ -696,16 +706,22 @@ def build_workflow(
     graph.add_edge("memory_evaluator", "generate_response")
     
     # After generate_response: use tools_condition to route (LLM decides)
-    # tools_condition returns "tools" if tool_calls present, END otherwise
     graph.add_conditional_edges(
         "generate_response",
         tools_condition,
         {"tools": "tools", END: "critique_response"},
     )
     
-    # After tool execution, process the result
+    # After tool execution, continue analysis or critique an explicit final answer.
     graph.add_edge("tools", "process_tool_result")
-    graph.add_edge("process_tool_result", "critique_response")
+    graph.add_conditional_edges(
+        "process_tool_result",
+        route_after_tool_result,
+        {
+            "generate_response": "generate_response",
+            "critique_response": "critique_response",
+        },
+    )
 
     # Critique/repair loop
     graph.add_conditional_edges(
@@ -734,5 +750,8 @@ def build_workflow(
     graph.add_edge("error_memory_writer", "record_turn")
     graph.add_edge("record_turn", END)
 
-    # Compile with both STM (checkpointer) and optional LTM (store).
-    return graph.compile(checkpointer=checkpointer, store=store)
+    # Compile with optional LTM store.
+    return graph.compile(
+        # checkpointer=checkpointer,
+        store=store,
+    )

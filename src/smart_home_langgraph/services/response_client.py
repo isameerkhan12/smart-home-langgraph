@@ -151,7 +151,11 @@ def _build_tool_prompt_messages(state: AgentState, max_tokens: int = 2000) -> li
         "2. Only query the DataFrame for values that are NOT in memory.\n"
         "3. Always print() the final result.\n"
         "4. Use proper pandas methods (mean(), sum(), value_counts(), etc.).\n"
-        "5. Handle potential errors gracefully.\n\n"
+        "5. Handle potential errors gracefully.\n"
+        "6. After every tool result, reassess the current user question.\n"
+        "7. When all requested values have been calculated, call submit_final_answer immediately.\n"
+        "   Do not continue with related, optional, or exploratory analysis.\n"
+        "8. Ignore previous-turn tasks; solve only the current user question.\n\n"
         f"Detected Intent: {state['intent']}\n\n"
         f"Memory Usage Mode: {state.get('memory_usage_mode', 'none')}\n\n"
     )
@@ -174,7 +178,7 @@ def _build_tool_prompt_messages(state: AgentState, max_tokens: int = 2000) -> li
     # return [system_message, *trimmed_history, HumanMessage(content=state["user_query"])]
 
     system_message = SystemMessage(content=system_content)
-    return [system_message, HumanMessage(content=state["user_query"])]
+    return [system_message, *state.get("messages", []), HumanMessage(content=state["user_query"])]
 
 
 def generate_response_with_tools(

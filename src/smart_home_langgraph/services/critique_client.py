@@ -10,6 +10,8 @@
 # ---------------------------------------------------------------------------
 from __future__ import annotations
 
+from langchain_core.messages import AIMessage, ToolMessage
+
 from smart_home_langgraph.config.settings import get_settings
 from smart_home_langgraph.graph.state import AgentState, CritiqueResult
 from smart_home_langgraph.services.json_utils import result_to_model
@@ -33,27 +35,39 @@ def _build_shared_critique_prompt(state: AgentState) -> str:
     return shared
 
 
-def _format_tool_execution_context(tool_result: dict | None) -> str:
-    """Format tool execution details for critique prompts."""
-    if not tool_result:
-        return ""
+def _format_tool_execution_context(state: AgentState) -> str:
+    """Format all tool calls and results for critique prompts."""
+    messages = state.get("messages", [])
+    context: list[str] = []
 
-    context = (
-        f"Code Executed:\n```python\n{tool_result.get('tool_input', 'N/A')}\n```\n\n"
-        f"Execution Output:\n{tool_result.get('tool_output', 'N/A')}\n\n"
-        f"Execution Success: {tool_result.get('success', True)}\n\n"
-    )
+    for index, message in enumerate(messages):
+        if not isinstance(message, AIMessage):
+            continue
 
-    if not tool_result.get("success"):
-        context += f"Error Message:\n{tool_result.get('error', 'N/A')}\n\n"
+        for tool_call in getattr(message, "tool_calls", []):
+            tool_call_id = tool_call.get("id")
+            tool_name = tool_call.get("name", "unknown_tool")
+            tool_args = tool_call.get("args", {})
+            output = "N/A"
+            for result in messages[index + 1:]:
+                if isinstance(result, ToolMessage) and result.tool_call_id == tool_call_id:
+                    output = result.content if isinstance(result.content, str) else str(result.content)
+                    break
 
-    return context
+            if tool_name == "python_repl":
+                code = tool_args.get("query") or tool_args.get("code", "")
+                context.append(
+                    f"Tool: {tool_name}\nCode Executed:\n```python\n{code}\n```\n\n"
+                    f"Execution Output:\n{output}\n\n"
+                )
+            else:
+                context.append(f"Tool: {tool_name}\nTool Output:\n{output}\n\n")
+
+    return "".join(context)
 
 
 def _build_code_critique_prompt(state: AgentState) -> str:
     """Build a critique prompt for code/tool execution results."""
-    tool_result = state.get("tool_result")
-    
     prompt = (
         "You are a strict evaluator for smart-home data analysis responses.\n"
         "Use only evidence from the task, code, and output.\n\n"
@@ -71,7 +85,7 @@ def _build_code_critique_prompt(state: AgentState) -> str:
         f"{_build_shared_critique_prompt(state)}"
     )
     
-    prompt += _format_tool_execution_context(tool_result)
+    prompt += _format_tool_execution_context(state)
     
     prompt += (
         "Return a JSON object with:\n"
@@ -95,8 +109,6 @@ def _build_code_critique_prompt(state: AgentState) -> str:
 
 def _build_partial_critique_prompt(state: AgentState) -> str:
     """Build a critique prompt for responses using memory and tool output."""
-    tool_result = state.get("tool_result")
-
     prompt = (
         "You are a strict evaluator for smart-home data analysis responses.\n"
         "Context: The retrieved memory was produced by a prior agent run and has already been checked by a critique node.\n"
@@ -116,7 +128,7 @@ def _build_partial_critique_prompt(state: AgentState) -> str:
         f"{_build_shared_critique_prompt(state)}"
     )
 
-    prompt += _format_tool_execution_context(tool_result)
+    prompt += _format_tool_execution_context(state)
 
     prompt += (
         "Return a JSON object with:\n"

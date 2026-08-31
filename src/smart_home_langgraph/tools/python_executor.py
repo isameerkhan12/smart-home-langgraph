@@ -10,7 +10,7 @@ import os
 
 import numpy as np
 import pandas as pd
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool, tool
 from langchain_experimental.tools.python.tool import PythonREPLTool
 from langchain_experimental.utilities.python import PythonREPL
 
@@ -44,6 +44,12 @@ _APPLIANCE_NAMES = {
     "Appliance8": "Television_Site",
     "Appliance9": "Electric_Heater",
 }
+
+
+@tool
+def submit_final_answer(answer: str) -> str:
+    """Submit the complete answer after all required analysis is finished."""
+    return answer
 
 
 def _load_dataframe(path: str = _DATA_FILE) -> pd.DataFrame:
@@ -87,4 +93,4 @@ def get_smart_home_tools(dataframe_path: str | None = None) -> list[BaseTool]:
         name="python_repl",
         description=_TOOL_DESCRIPTION,
     )
-    return [tool]
+    return [tool, submit_final_answer]

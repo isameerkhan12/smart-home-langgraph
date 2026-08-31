@@ -15,20 +15,22 @@ flowchart TD
     end
 
     subgraph generation["Response Generation"]
-        P -->|"sets use_memory_only flag"| F[generate_response]
+        P -->|"sets tools_usage and memory_usage_mode"| F[generate_response]
         F --> G{tools_condition?}
         G -->|"tool_calls present"| H[tools]
         G -->|"no tool_calls"| I[critique_response]
         H --> J[process_tool_result]
-        J --> I
+        J --> K{route_after_tool_result}
+        K -->|"ordinary tool result"| F
+        K -->|"submit_final_answer"| I
     end
 
     subgraph repair["Critique & Repair Loop"]
-        I --> K{route_after_critique}
-        K -->|"passed"| L[memory_writer]
-        K -->|"failed, can repair"| M[repair_response]
-        K -->|"tool failed, can repair"| N[retrieve_error_memory]
-        K -->|"tool failed, max repairs"| O[error_memory_writer]
+        I --> S{route_after_critique}
+        S -->|"passed"| L[memory_writer]
+        S -->|"failed, can repair"| M[repair_response]
+        S -->|"tool failed, can repair"| N[retrieve_error_memory]
+        S -->|"tool failed, max repairs"| O[error_memory_writer]
         N --> M
         M --> G2{tools_condition?}
         G2 -->|"tool_calls"| H
@@ -46,8 +48,9 @@ flowchart TD
 
 The **memory_evaluator** node decides whether memory is sufficient to answer the user's question:
 
-- **`use_memory_only = true`**: Memory contains the answer → `generate_response` and `repair_response` run **without tools bound** (LLM physically cannot call `python_repl`)
-- **`use_memory_only = false`**: Computation needed → `generate_response` and `repair_response` run **with tools bound** (LLM can call `python_repl`)
+- **`memory_usage_mode = memory_only`**: Memory contains the answer → `generate_response` and `repair_response` run **without tools bound** (LLM physically cannot call analysis tools)
+- **`memory_usage_mode = partial`**: Memory contains some facts → tools are available for missing facts, and the response combines memory with tool results
+- **`memory_usage_mode = none`**: Computation is needed → tools are available for the full analysis
 
 This prevents redundant tool calls when the answer already exists in long-term memory.
 
@@ -55,6 +58,7 @@ This prevents redundant tool calls when the answer already exists in long-term m
 
 - Entry point: `detect_intent`.
 - Memory evaluator gates tool access based on memory sufficiency.
-- Tool execution is optional and controlled by `tools_condition`.
-- Critique-repair loop exits to `memory_writer` on pass or max repair exhaustion.
+- Direct answers and explicit `submit_final_answer` results go to `critique_response`.
+- Ordinary tool results loop back to `generate_response` so multi-step analysis can continue before critique.
+- The critique-repair loop exits to `memory_writer` on pass or max repair exhaustion.
 - If tool failure persists at max repairs, flow writes to `error_memory_writer` before ending.
