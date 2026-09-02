@@ -106,6 +106,31 @@ class AgentState(TypedDict):
     # Explanation from memory evaluator for the decision.
     planner_reason: str
 
+    # ---- Plan (populated by propose_plan / plan_critique nodes) ------------
+    # Proposed step-by-step strategy for multi-step questions. Empty when not multi-step.
+    plan: str
+
+    # True when the memory evaluator decided this question needs a multi-step plan.
+    is_multi_step: bool
+
+    # Structured quality feedback on the proposed plan, before any execution.
+    plan_critique_result: CritiqueResult
+
+    # Current plan revision count (starts at 0, incremented on each plan repair).
+    plan_repair_count: int
+
+    # Maximum number of plan revisions allowed before proceeding anyway.
+    max_plan_repairs: int
+
+    # Structured quality feedback on the most recent executed step (mid-loop).
+    step_critique_result: CritiqueResult
+
+    # Current step retry count (starts at 0, incremented on each step retry).
+    step_repair_count: int
+
+    # Maximum number of step retries allowed before continuing without further checks.
+    max_step_repairs: int
+
     # ---- Response (populated by generate_response / repair_response nodes) --
     # The final answer to return to the user. May be regenerated on repair.
     response: str

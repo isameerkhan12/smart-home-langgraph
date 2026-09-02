@@ -34,10 +34,16 @@ Mode mapping:
 - partial -> tools_usage=true
 - none -> tools_usage=true
 
+Also decide is_multi_step:
+- true when answering requires several dependent calculation steps, where a later
+  step needs the result of an earlier step (e.g. "find X, then using X compute Y").
+- false for single-step lookups or single calculations.
+
 Respond with a JSON object:
 {
     "tools_usage": true/false,
     "memory_usage_mode": "memory_only" | "partial" | "none",
+    "is_multi_step": true/false,
   "reason": "brief explanation (1 sentence)"
 }
 
@@ -79,6 +85,7 @@ def evaluate_memory_sufficiency(state: AgentState) -> PlannerDecision:
         return PlannerDecision(
             tools_usage=True,
             memory_usage_mode="none",
+            is_multi_step=False,
             reason="No relevant memory available; tools needed for computation.",
         )
 
@@ -87,6 +94,7 @@ def evaluate_memory_sufficiency(state: AgentState) -> PlannerDecision:
         return PlannerDecision(
             tools_usage=False,
             memory_usage_mode="memory_only",
+            is_multi_step=False,
             reason="API key missing; defaulting to memory-based response.",
         )
 
@@ -101,5 +109,6 @@ def evaluate_memory_sufficiency(state: AgentState) -> PlannerDecision:
         return PlannerDecision(
             tools_usage=True,
             memory_usage_mode="none",
+            is_multi_step=False,
             reason=f"Planner error ({exc}); defaulting to tools.",
         )

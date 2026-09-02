@@ -16,6 +16,10 @@ class PlannerDecision(BaseModel):
     memory_usage_mode: Literal["memory_only", "partial", "none"] = Field(
         description="How much the answer can rely on memory: memory_only, partial, or none"
     )
+    is_multi_step: bool = Field(
+        default=False,
+        description="True when the question requires multiple dependent calculation steps",
+    )
     reason: str = Field(description="Brief explanation for the decision")
 
     @model_validator(mode="after")

@@ -94,6 +94,20 @@ def _fallback_response(state: AgentState, reason: str) -> str:
     )
 
 
+def _generate_text(state: AgentState, prompt_messages: list) -> tuple[str, bool]:
+    """Invoke the configured provider on prompt_messages, with a deterministic fallback on failure."""
+    settings = get_settings()
+    if _requires_provider_api_key(settings) and not settings.openrouter_api_key:
+        return _fallback_response(state, f"missing {_provider_api_key_name(settings)}"), False
+
+    try:
+        model = build_model(settings, temperature=0.2)
+        result = model.invoke(prompt_messages)
+        return result_to_text(result).strip(), True
+    except Exception as exc:  # noqa: BLE001 - we want robust fallback for all runtime failures
+        return _fallback_response(state, f"{settings.llm_provider} error: {exc}"), False
+
+
 def generate_response(
     state: AgentState,
 ) -> tuple[str, bool]:
@@ -106,21 +120,39 @@ def generate_response(
     Returns:
       (response_text, used_live_llm)
     """
-    settings = get_settings()
-    if _requires_provider_api_key(settings) and not settings.openrouter_api_key:
-        return _fallback_response(state, f"missing {_provider_api_key_name(settings)}"), False
-
     prompt_messages = _build_prompt_messages(state)
-
     _ = count_tokens_approximately(prompt_messages)
+    return _generate_text(state, prompt_messages)
 
-    try:
-        model = build_model(settings, temperature=0.2)
-        result = model.invoke(prompt_messages)
-        text = result_to_text(result)
-        return text.strip(), True
-    except Exception as exc:  # noqa: BLE001 - we want robust fallback for all runtime failures
-        return _fallback_response(state, f"{settings.llm_provider} error: {exc}"), False
+
+def _build_plan_prompt_messages(state: AgentState) -> list:
+    """Build a prompt asking the LLM to propose a step-by-step strategy before executing."""
+    system_content = (
+        "You are a smart-home data analysis assistant. Before writing any code, "
+        "propose a short numbered plan of the dependent steps needed to answer the question.\n"
+        "Each step should state what will be computed and why it is needed for the next step.\n"
+        "Do not write Python code or call any tool. Only describe the plan.\n\n"
+        f"Detected Intent: {state['intent']}\n\n"
+    )
+    if state.get("memory_context"):
+        system_content += f"Memory Context:\n{state['memory_context']}\n\n"
+
+    plan_critique = state.get("plan_critique_result")
+    if state.get("plan") and plan_critique and not plan_critique.get("passed", True):
+        system_content += (
+            f"Previous Plan (needs revision):\n{state['plan']}\n\n"
+            f"Revision Hints:\n{plan_critique.get('repair_hints', '')}\n\n"
+        )
+
+    system_message = SystemMessage(content=system_content)
+    return [system_message, HumanMessage(content=state["user_query"])]
+
+
+def propose_plan(state: AgentState) -> str:
+    """Generate a step-by-step plan text for a multi-step question."""
+    prompt_messages = _build_plan_prompt_messages(state)
+    text, _ = _generate_text(state, prompt_messages)
+    return text
 
 
 def _build_tool_prompt_messages(state: AgentState, max_tokens: int = 2000) -> list:
@@ -163,6 +195,19 @@ def _build_tool_prompt_messages(state: AgentState, max_tokens: int = 2000) -> li
     # Memory context is injected before sensor context so it appears closest to the instructions above.
     if state.get("memory_context"):
         system_content += f"Memory Context:\n{state['memory_context']}\n\n"
+
+    if state.get("plan"):
+        system_content += (
+            f"Approved Plan:\n{state['plan']}\n\n"
+            "Follow this plan step by step. Execute one step per tool call.\n\n"
+        )
+
+    step_feedback = state.get("step_critique_result")
+    if step_feedback and not step_feedback.get("passed", True) and step_feedback.get("repair_hints"):
+        system_content += (
+            f"Feedback on the previous step:\n{step_feedback['repair_hints']}\n"
+            "Correct this step before continuing with the plan.\n\n"
+        )
 
     # STM (short-term message history) disabled: LTM + memory evaluator cover the memory use case.
     # Re-enable if follow-up conversational context is needed.

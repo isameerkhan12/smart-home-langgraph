@@ -21,15 +21,15 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.prebuilt import ToolNode
 from langgraph.store.base import BaseStore
 
 from smart_home_langgraph.evaluation.metrics import EpisodeRecord
 from smart_home_langgraph.graph.state import AgentState, CritiqueResult, ToolExecutionResult
 from smart_home_langgraph.memory.ltm_schema import MemoryType
-from smart_home_langgraph.services.critique_client import critique_response
+from smart_home_langgraph.services.critique_client import critique_response, critique_plan, critique_step
 from smart_home_langgraph.services.planner_client import evaluate_memory_sufficiency
-from smart_home_langgraph.services.response_client import generate_response, generate_tool_enabled_response
+from smart_home_langgraph.services.response_client import generate_response, generate_tool_enabled_response, propose_plan
 from smart_home_langgraph.services.summary_client import summarize_messages
 from smart_home_langgraph.services.memory_extractor import extract_structured_memories
 from smart_home_langgraph.tools.python_executor import get_smart_home_tools, submit_final_answer
@@ -41,6 +41,27 @@ CritiqueGenerator = Callable[[AgentState], CritiqueResult]
 
 # Experiment toggle: when False, keep raw tool output (no formatting).
 TOOL_OUTPUT_FORMATTING_ENABLED = False
+
+
+def safe_tools_condition(state: AgentState) -> Literal["tools", "END"]:
+    """
+    Safely route to tools or end based on messages state.
+    
+    Handles the case where messages might be empty (e.g., in memory-only paths).
+    Unlike langgraph's tools_condition, this doesn't fail on empty messages.
+    """
+    messages = state.get("messages", [])
+    
+    # If no messages, route to END (no tools to call)
+    if not messages:
+        return END
+    
+    # Check the last message for tool calls
+    last_message = messages[-1]
+    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        return "tools"
+    
+    return END
 
 
 def render_tool_output(tool_output: object, indent: int = 0) -> str:
@@ -83,6 +104,8 @@ def render_tool_output(tool_output: object, indent: int = 0) -> str:
 def initial_state(
     query: str,
     max_repairs: int = 2,
+    max_plan_repairs: int = 1,
+    max_step_repairs: int = 2,
     messages: list[BaseMessage] | None = None,
 ) -> AgentState:
     """
@@ -102,6 +125,31 @@ def initial_state(
         "tools_usage": True,
         "memory_usage_mode": "none",
         "planner_reason": "",
+        # Plan (multi-step questions only)
+        "plan": "",
+        "is_multi_step": False,
+        "plan_critique_result": {
+            "passed": False,
+            "issues": [],
+            "severity": "minor_revision",
+            "repair_hints": "",
+            "pass_reasons": [],
+            "force_full_recompute": False,
+            "critique_status": "not_run",
+        },
+        "plan_repair_count": 0,
+        "max_plan_repairs": max_plan_repairs,
+        "step_critique_result": {
+            "passed": False,
+            "issues": [],
+            "severity": "minor_revision",
+            "repair_hints": "",
+            "pass_reasons": [],
+            "force_full_recompute": False,
+            "critique_status": "not_run",
+        },
+        "step_repair_count": 0,
+        "max_step_repairs": max_step_repairs,
         # Response
         "response": "",
         "used_live_llm": False,
@@ -229,14 +277,46 @@ def build_workflow(
         """
         Decide whether memory is sufficient to answer the question.
         
-        Sets tools_usage flag and memory_usage_mode for downstream routing.
+        Sets tools_usage flag, memory_usage_mode, and is_multi_step for downstream routing.
         """
         decision = evaluate_memory_sufficiency(state)
         return {
             **state,
             "tools_usage": decision.tools_usage,
             "memory_usage_mode": decision.memory_usage_mode,
+            "is_multi_step": decision.is_multi_step,
             "planner_reason": decision.reason,
+        }
+
+    def propose_plan_node(state: AgentState) -> AgentState:
+        """Propose (or revise) a step-by-step plan for a multi-step question."""
+        is_retry = bool(state.get("plan"))
+        plan_text = propose_plan(state)
+        return {
+            **state,
+            "plan": plan_text,
+            "plan_repair_count": state.get("plan_repair_count", 0) + (1 if is_retry else 0),
+        }
+
+    def plan_critique_node(state: AgentState) -> AgentState:
+        """Evaluate the proposed plan before any execution starts."""
+        result = critique_plan(state)
+        return {**state, "plan_critique_result": result}
+
+    def step_critique_node(state: AgentState) -> AgentState:
+        """Evaluate the most recently executed step of a multi-step plan."""
+        result = critique_step(state)
+        if result["passed"]:
+            return {**state, "step_critique_result": result}
+
+        if state.get("step_repair_count", 0) >= state.get("max_step_repairs", 0):
+            # Step retry budget exhausted: stop flagging and rely on the final critique/repair loop.
+            return {**state, "step_critique_result": {**result, "passed": True}}
+
+        return {
+            **state,
+            "step_critique_result": result,
+            "step_repair_count": state.get("step_repair_count", 0) + 1,
         }
 
     def retrieve_error_memory_node(state: AgentState,config: RunnableConfig | None = None,*,store: BaseStore | None = None,) -> AgentState:
@@ -280,7 +360,12 @@ def build_workflow(
         # Memory-only path: tools are not bound.
         if not state.get("tools_usage", True):
             response_text, used_live_llm = response_gen(state)
-            return {**state, "response": response_text, "used_live_llm": used_live_llm}
+            return {
+                **state,
+                "response": response_text,
+                "used_live_llm": used_live_llm,
+                "messages": [AIMessage(content=response_text)],
+            }
 
         # Tool-usage path: tools are bound for missing or new computation.
         if available_tools:
@@ -381,10 +466,12 @@ def build_workflow(
             "tool_execution_count": state.get("tool_execution_count", 0) + 1,
         }
 
-    def route_after_tool_result(state: AgentState) -> Literal["generate_response", "critique_response"]:
-        """Critique only after the model explicitly submits its final answer."""
+    def route_after_tool_result(state: AgentState) -> Literal["generate_response", "critique_response", "step_critique"]:
+        """Critique the final answer, check an intermediate plan step, or continue."""
         if state.get("tool_result", {}).get("tool_name") == "submit_final_answer":
             return "critique_response"
+        if state.get("plan"):
+            return "step_critique"
         return "generate_response"
 
     def record_turn(state: AgentState) -> AgentState:
@@ -407,6 +494,8 @@ def build_workflow(
         """
         Summarize older messages to keep context window manageable.
         Keeps last 2 messages, summarizes the rest, removes originals using RemoveMessage.
+        
+        NOTE: Currently disabled in graph routing but available for future multi-turn conversations.
         """
         history = state["messages"]
         
@@ -490,6 +579,7 @@ def build_workflow(
                 "response": response_text,
                 "used_live_llm": used_live_llm or base_state["used_live_llm"],
                 "repair_count": base_state["repair_count"] + 1,
+                "messages": [AIMessage(content=response_text)],
             }
         
         # Tools allowed — regenerate with tools bound
@@ -521,6 +611,7 @@ def build_workflow(
                 "response": response_text,
                 "used_live_llm": used_live_llm or base_state["used_live_llm"],
                 "repair_count": base_state["repair_count"] + 1,
+                "messages": [AIMessage(content=response_text)],
             }
 
     def memory_writer_node(state: AgentState,config: RunnableConfig | None = None,*,store: BaseStore | None = None,) -> AgentState:
@@ -670,6 +761,20 @@ def build_workflow(
 
         return "repair"
 
+    def route_after_memory_evaluator(state: AgentState) -> Literal["propose_plan", "generate_response"]:
+        """Only multi-step questions that use tools go through the plan/plan-critique loop."""
+        if state.get("is_multi_step") and state.get("tools_usage", True):
+            return "propose_plan"
+        return "generate_response"
+
+    def route_after_plan_critique(state: AgentState) -> Literal["generate_response", "propose_plan"]:
+        """Approve the plan, revise it under the retry budget, or fail open to execution."""
+        if state["plan_critique_result"]["passed"]:
+            return "generate_response"
+        if state["plan_repair_count"] < state["max_plan_repairs"]:
+            return "propose_plan"
+        return "generate_response"
+
     # ------------------------------------------------------------------
     # Graph wiring
     # ------------------------------------------------------------------
@@ -679,7 +784,11 @@ def build_workflow(
     graph.add_node("detect_intent", detect_intent)
     graph.add_node("retrieve_context", retrieve_context)
     graph.add_node("memory_evaluator", memory_evaluator_node)
+    # Kept for future multi-turn conversation support
     graph.add_node("summarize", summarize_node)
+    graph.add_node("propose_plan", propose_plan_node)
+    graph.add_node("plan_critique", plan_critique_node)
+    graph.add_node("step_critique", step_critique_node)
     graph.add_node("generate_response", generate_response_node)
     graph.add_node("tools", tool_node)
     graph.add_node("process_tool_result", process_tool_result)
@@ -687,32 +796,41 @@ def build_workflow(
     graph.add_node("retrieve_error_memory", retrieve_error_memory_node)
     graph.add_node("repair_response", repair_node)
     graph.add_node("error_memory_writer", error_memory_writer_node)
+    # Kept for future multi-turn conversation support
     graph.add_node("record_turn", record_turn)
     graph.add_node("memory_writer", memory_writer_node)
 
     # Set entry point
     graph.set_entry_point("detect_intent")
     graph.add_edge("detect_intent", "retrieve_context")
+    # Direct path: skip summarize for single-query workflows
+    # To enable multi-turn with summarization, replace with:
+    #   graph.add_conditional_edges("retrieve_context", should_summarize, {"summarize": "summarize", "continue": "memory_evaluator"})
+    #   graph.add_edge("summarize", "memory_evaluator")
+    graph.add_edge("retrieve_context", "memory_evaluator")
 
-    # Conditional summarization: routes to summarize or directly to memory evaluator
+    # Memory evaluator decides memory vs tools; multi-step questions go through planning first.
     graph.add_conditional_edges(
-        "retrieve_context",
-        should_summarize,
-        {"summarize": "summarize", "continue": "memory_evaluator"},
+        "memory_evaluator",
+        route_after_memory_evaluator,
+        {"propose_plan": "propose_plan", "generate_response": "generate_response"},
     )
-    graph.add_edge("summarize", "memory_evaluator")
-    
-    # Memory evaluator decides memory vs tools, then generates response
-    graph.add_edge("memory_evaluator", "generate_response")
-    
-    # After generate_response: use tools_condition to route (LLM decides)
+
+    graph.add_edge("propose_plan", "plan_critique")
+    graph.add_conditional_edges(
+        "plan_critique",
+        route_after_plan_critique,
+        {"generate_response": "generate_response", "propose_plan": "propose_plan"},
+    )
+
+    # After generate_response: use safe_tools_condition to route (LLM decides)
     graph.add_conditional_edges(
         "generate_response",
-        tools_condition,
+        safe_tools_condition,
         {"tools": "tools", END: "critique_response"},
     )
     
-    # After tool execution, continue analysis or critique an explicit final answer.
+    # After tool execution, continue analysis, check an intermediate plan step, or critique an explicit final answer.
     graph.add_edge("tools", "process_tool_result")
     graph.add_conditional_edges(
         "process_tool_result",
@@ -720,8 +838,10 @@ def build_workflow(
         {
             "generate_response": "generate_response",
             "critique_response": "critique_response",
+            "step_critique": "step_critique",
         },
     )
+    graph.add_edge("step_critique", "generate_response")
 
     # Critique/repair loop
     graph.add_conditional_edges(
@@ -738,17 +858,21 @@ def build_workflow(
     # On tool failure, fetch error-specific memories before attempting repair.
     graph.add_edge("retrieve_error_memory", "repair_response")
 
-    # After repair: use tools_condition again
+    # After repair: use safe_tools_condition again
     graph.add_conditional_edges(
         "repair_response",
-        tools_condition,
+        safe_tools_condition,
         {"tools": "tools", END: "critique_response"},
     )
     
     # Final steps
-    graph.add_edge("memory_writer", "record_turn")
-    graph.add_edge("error_memory_writer", "record_turn")
-    graph.add_edge("record_turn", END)
+    # For multi-turn conversation support, uncomment:
+    #   graph.add_edge("memory_writer", "record_turn")
+    #   graph.add_edge("error_memory_writer", "record_turn")
+    #   graph.add_edge("record_turn", END)
+    # For current single-query workflows:
+    graph.add_edge("memory_writer", END)
+    graph.add_edge("error_memory_writer", END)
 
     # Compile with optional LTM store.
     return graph.compile(

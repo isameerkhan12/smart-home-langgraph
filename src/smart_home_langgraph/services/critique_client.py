@@ -19,16 +19,20 @@ from smart_home_langgraph.services.llm_schema import CritiqueDecision
 from smart_home_langgraph.services.model_factory import build_model
 
 
+def _build_query_context(state: AgentState) -> str:
+    """Build the user query + detected intent header shared by every critique prompt."""
+    return (
+        f"User Query:\n{state['user_query']}\n\n"
+        f"Detected Intent:\n{state['intent']}\n\n"
+    )
+
+
 def _build_shared_critique_prompt(state: AgentState) -> str:
-    """Build the shared critique context used by all prompt variants."""
+    """Build the shared critique context used by response-evaluating prompt variants."""
     memory_usage_mode = state.get("memory_usage_mode", "none")
     memory_context = state.get("memory_context", "")
 
-    shared = (
-        f"User Query:\n{state['user_query']}\n\n"
-        f"Detected Intent:\n{state['intent']}\n\n"
-        f"Memory Usage Mode: {memory_usage_mode}\n\n"
-    )
+    shared = _build_query_context(state) + f"Memory Usage Mode: {memory_usage_mode}\n\n"
     if memory_context and "No relevant" not in memory_context and "No long-term" not in memory_context:
         shared += f"Retrieved Memory Context:\n{memory_context}\n\n"
     shared += f"Response to Evaluate:\n{state['response']}\n\n"
@@ -208,9 +212,102 @@ def _build_memory_critique_prompt(state: AgentState) -> str:
     )
 
 
+def _build_plan_critique_prompt(state: AgentState) -> str:
+    """Build a critique prompt for a proposed step-by-step plan, before execution."""
+    return (
+        "You are a strict reviewer for a proposed data-analysis plan.\n"
+        "No code has executed yet. Judge only whether the plan's approach is sound.\n\n"
+        "Checks (all required):\n"
+        "  1. Does the plan address every part of the user's question?\n"
+        "  2. Are the steps logically ordered, with later steps correctly depending on earlier results?\n"
+        "  3. Does the plan avoid unnecessary or irrelevant steps?\n"
+        "  4. Is the plan specific enough to be executed as code (not vague)?\n\n"
+        f"{_build_query_context(state)}"
+        f"Proposed Plan:\n{state.get('plan', '')}\n\n"
+        "Return a JSON object with:\n"
+        '  "passed": true/false\n'
+        '  "issues": list of identified problems (empty if passed)\n'
+        '  "severity": "success", "minor_revision", "major_revision", or "fail"\n'
+        '  "repair_hints": suggestions for fixing the plan (MUST be "" when passed=true)\n'
+        '  "pass_reasons": concise list of why the plan passed (2-4 items when passed=true, empty when passed=false)\n'
+        '  "critique_status": "completed"\n\n'
+        "Set passed=true only for severity=success. Set passed=false for all revision or fail outcomes.\n\n"
+        "Respond ONLY with the JSON object, wrapped in ```json ```."
+    )
+
+
+def _build_step_critique_prompt(state: AgentState) -> str:
+    """Build a critique prompt for the most recently executed step of a multi-step plan."""
+    prompt = (
+        "You are a strict reviewer for one intermediate step of a multi-step data-analysis plan.\n"
+        "Judge only the most recent executed step against the plan. Do not require the final answer yet.\n\n"
+        "Checks (all required):\n"
+        "  1. Does the most recent code correspond to the next unfinished step of the plan?\n"
+        "  2. Did execution succeed without errors?\n"
+        "  3. Are the computed values realistic and internally consistent for this step?\n"
+        "  4. Is the step's result usable as input for the plan's remaining steps?\n\n"
+        f"{_build_query_context(state)}"
+        f"Plan:\n{state.get('plan', '')}\n\n"
+    )
+
+    prompt += _format_tool_execution_context(state)
+
+    prompt += (
+        "Return a JSON object with:\n"
+        '  "passed": true/false\n'
+        '  "issues": list of identified problems (empty if passed)\n'
+        '  "severity": "success", "minor_revision", "major_revision", or "fail"\n'
+        '  "repair_hints": suggestions for fixing this step (MUST be "" when passed=true)\n'
+        '  "pass_reasons": concise list of why the step passed (2-4 items when passed=true, empty when passed=false)\n'
+        '  "critique_status": "completed"\n\n'
+        "Set passed=true only for severity=success. Set passed=false for all revision or fail outcomes.\n\n"
+        "Respond ONLY with the JSON object, wrapped in ```json ```."
+    )
+
+    return prompt
+
+
 def _to_critique_result(decision: CritiqueDecision) -> CritiqueResult:
     """Convert validated schema object to the workflow state type."""
     return decision.model_dump()
+
+
+def _skip_if_no_key(settings, reason: str) -> CritiqueResult | None:
+    """Return a skipped-config result when the provider API key is missing, else None."""
+    if settings.llm_provider.lower() == "openrouter" and not settings.openrouter_api_key:
+        return _to_critique_result(CritiqueDecision.skipped_config(reason))
+    return None
+
+
+def _execution_failure_result(tool_result: dict) -> CritiqueResult:
+    """Build a fail result for a tool execution that raised an error."""
+    return _to_critique_result(
+        CritiqueDecision(
+            passed=False,
+            issues=["Code execution failed", tool_result.get("error", "Unknown error")],
+            severity="fail",
+            repair_hints=(
+                f"The previous code raised an error. "
+                f"Fix the following issue: {tool_result.get('error', 'Unknown error')}. "
+                f"Common fixes: check column names, handle NaN values, use correct pandas methods."
+            ),
+            critique_status="completed",
+        )
+    )
+
+
+def _run_critique(settings, prompt: str) -> CritiqueResult:
+    """Invoke the critique model on a prompt, with a fallback-accept result on error."""
+    try:
+        model = build_model(
+            settings,
+            temperature=0.3,
+            structured_output_schema=CritiqueDecision,
+        )
+        result = model.invoke(prompt)
+        return _to_critique_result(result_to_model(result, CritiqueDecision))
+    except Exception as exc:  # noqa: BLE001 - robust fallback on any error
+        return _to_critique_result(CritiqueDecision.fallback_error(str(exc)))
 
 
 def critique_response(state: AgentState) -> CritiqueResult:
@@ -226,32 +323,15 @@ def critique_response(state: AgentState) -> CritiqueResult:
     pass_reasons, and critique_status.
     """
     settings = get_settings()
-    if settings.llm_provider.lower() == "openrouter" and not settings.openrouter_api_key:
-        # If no key, accept with explicit skipped status.
-        return _to_critique_result(
-            CritiqueDecision.skipped_config(
-                "Critique step was skipped because OpenRouter API key is missing."
-            )
-        )
+    skipped = _skip_if_no_key(settings, "Critique step was skipped because OpenRouter API key is missing.")
+    if skipped is not None:
+        return skipped
 
     tool_result = state.get("tool_result")
     memory_usage_mode = state.get("memory_usage_mode", "none")
 
     if memory_usage_mode != "memory_only" and tool_result and not tool_result.get("success", True):
-        return _to_critique_result(
-            CritiqueDecision(
-                passed=False,
-                issues=["Code execution failed", tool_result.get("error", "Unknown error")],
-                severity="fail",
-                repair_hints=(
-                    f"The previous code raised an error. "
-                    f"Fix the following issue: {tool_result.get('error', 'Unknown error')}. "
-                    f"Common fixes: check column names, handle NaN values, use correct pandas methods."
-                ),
-                force_full_recompute=False,
-                critique_status="completed",
-            )
-        )
+        return _execution_failure_result(tool_result)
 
     # Route to prompt matching the evidence available for this response.
     if memory_usage_mode == "memory_only":
@@ -261,14 +341,40 @@ def critique_response(state: AgentState) -> CritiqueResult:
     else:
         prompt = _build_code_critique_prompt(state)
 
-    try:
-        model = build_model(
-            settings,
-            temperature=0.3,
-            structured_output_schema=CritiqueDecision,
-        )
-        result = model.invoke(prompt)
-        return _to_critique_result(result_to_model(result, CritiqueDecision))
-    except Exception as exc:  # noqa: BLE001 - robust fallback on any error
-        # If critique fails, accept with explicit fallback status.
-        return _to_critique_result(CritiqueDecision.fallback_error(str(exc)))
+    return _run_critique(settings, prompt)
+
+
+def critique_plan(state: AgentState) -> CritiqueResult:
+    """
+    Evaluate a proposed step-by-step plan before any code executes.
+
+    Returns:
+    CritiqueResult dict with passed, issues, severity, repair_hints,
+    pass_reasons, and critique_status.
+    """
+    settings = get_settings()
+    skipped = _skip_if_no_key(settings, "Plan critique was skipped because OpenRouter API key is missing.")
+    if skipped is not None:
+        return skipped
+
+    return _run_critique(settings, _build_plan_critique_prompt(state))
+
+
+def critique_step(state: AgentState) -> CritiqueResult:
+    """
+    Evaluate the most recently executed step of a multi-step plan.
+
+    Returns:
+    CritiqueResult dict with passed, issues, severity, repair_hints,
+    pass_reasons, and critique_status.
+    """
+    settings = get_settings()
+    skipped = _skip_if_no_key(settings, "Step critique was skipped because OpenRouter API key is missing.")
+    if skipped is not None:
+        return skipped
+
+    tool_result = state.get("tool_result")
+    if tool_result and not tool_result.get("success", True):
+        return _execution_failure_result(tool_result)
+
+    return _run_critique(settings, _build_step_critique_prompt(state))
