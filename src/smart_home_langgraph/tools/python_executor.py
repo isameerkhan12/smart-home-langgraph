@@ -18,7 +18,8 @@ from langchain_experimental.utilities.python import PythonREPL
 _DATA_FILE = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
     "data",
-    "preprocessed_dataset.csv",
+    "House_1.csv",
+    "House_1.csv",
 )
 
 # Tool description with column info for LLM context

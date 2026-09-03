@@ -27,10 +27,10 @@ MEMORY_EXTRACTION_PROMPT = """You extract long-term memories from a smart-home a
 Memory Types:
 - "recipe": Code patterns, calculation methods, or reusable approaches that worked successfully.
   ALWAYS store as recipe if the response contains working Python code or a successful calculation method.
-  Example: "To calculate average energy: use df['Energy_Consumption_kWh'].mean()"
+  Example: "To calculate average Fridge consumption: use df['Fridge'].mean()"
 - "mistake": Errors, failed approaches, or wrong column names to avoid in future.
   Store if the response mentions an error, correction, or failed attempt.
-  Example: "Avoid using 'Voltage_Reading' column - correct name is 'Line_Voltage'"
+  Example: "Avoid using 'Appliance1_Power' column - correct name is 'Fridge' (already renamed in df)"
 - "preference": User preferences about format, units, or behavior.
 - "general": Other useful facts about the smart home data or domain.
 
