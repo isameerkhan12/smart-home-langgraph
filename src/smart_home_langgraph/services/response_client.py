@@ -135,7 +135,12 @@ def _build_plan_prompt_messages(state: AgentState) -> list:
         f"Detected Intent: {state['intent']}\n\n"
     )
     if state.get("memory_context"):
-        system_content += f"Memory Context:\n{state['memory_context']}\n\n"
+        system_content += (
+            f"Memory Context:\n{state['memory_context']}\n\n"
+            "Decide for yourself whether this memory is relevant and reusable for this plan.\n"
+            "Start the plan with a 'Memory usage:' line stating either which memory items you "
+            "are reusing, or that the memory is not relevant/reusable and the plan is built from scratch.\n\n"
+        )
 
     plan_critique = state.get("plan_critique_result")
     if state.get("plan") and plan_critique and not plan_critique.get("passed", True):
