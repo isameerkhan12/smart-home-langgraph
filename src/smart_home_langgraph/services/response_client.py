@@ -137,9 +137,10 @@ def _build_plan_prompt_messages(state: AgentState) -> list:
     if state.get("memory_context"):
         system_content += (
             f"Memory Context:\n{state['memory_context']}\n\n"
-            "Decide for yourself whether this memory is relevant and reusable for this plan.\n"
-            "Start the plan with a 'Memory usage:' line stating either which memory items you "
-            "are reusing, or that the memory is not relevant/reusable and the plan is built from scratch.\n\n"
+            "Decide whether this memory is relevant to each plan step.\n"
+            "At the top of the plan, include a 'Memory usage:' line stating whether the plan uses memory overall or is built from scratch.\n"
+            "For every step, include exactly one line in this format: 'Memory used: yes|partial|no - <brief description>'.\n"
+            "Use 'yes' when the step is based entirely on memory, 'partial' when it combines memory with fresh computation, and 'no - none' when it is computed entirely from fresh data.\n\n"
         )
 
     plan_critique = state.get("plan_critique_result")
