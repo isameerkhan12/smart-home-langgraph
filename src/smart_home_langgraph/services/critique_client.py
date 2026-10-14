@@ -250,8 +250,11 @@ def _build_step_critique_prompt(state: AgentState) -> str:
         "  3. Are the computed values realistic and internally consistent for this step?\n"
         "  4. Is the step's result usable as input for the plan's remaining steps?\n"
         "  5. Does the step's declared memory usage match reality?\n"
-        "     If the step says it reused memory, the 'Memory used:' note should describe a relevant memory point and not contradict the execution.\n"
-        "     If the step says it did not use memory, it should not claim otherwise.\n\n"
+        "     The executed Python code must begin with a '# Memory used:' comment.\n"
+        "     If the comment is missing, vague, or inconsistent with the code, set passed=false.\n"
+        "     If the code uses a value, recipe, or fact from Memory Context, the comment must identify it.\n"
+        "     If the code uses only results from completed plan steps, the comment must say '# Memory used: none'.\n"
+        "     Do not treat the plan's memory declaration as proof of actual memory usage.\n\n"
         f"{_build_query_context(state)}"
         f"Plan:\n{state.get('plan', '')}\n\n"
     )

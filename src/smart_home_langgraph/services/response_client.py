@@ -161,13 +161,8 @@ def propose_plan(state: AgentState) -> str:
     return text
 
 
-def _build_tool_prompt_messages(state: AgentState, max_tokens: int = 2000) -> list:
-    """
-    Build a prompt for tool-enabled generation.
-    
-    This prompt instructs the LLM to use the available tools (primarily python_repl)
-    to analyze the smart home telemetry data and answer calculation questions.
-    """
+def _build_tool_system_content(state: AgentState) -> str:
+    """Build the shared context and tool instructions for data analysis."""
     system_content = (
         "You are a smart-home data analysis assistant with access to tools.\n\n"
         "You have access to a Python execution tool that can analyze the smart home energy consumption data (House_1 dataset).\n"
@@ -183,29 +178,53 @@ def _build_tool_prompt_messages(state: AgentState, max_tokens: int = 2000) -> li
         "   (e.g. 'Washing Machine March 2014 = 7.36 kWh'), assign it as a Python variable\n"
         "   at the top of your code (e.g. washing_machine_kwh = 7.36) and use that\n"
         "   variable in your calculation — do NOT recompute it from the DataFrame.\n"
-        "2. Then read all previous tool calls and outputs in the conversation. Treat\n"
-        "   completed results as short-term memory: reuse their values directly and\n"
-        "   do NOT recalculate them. Query the DataFrame only for missing values or\n"
-        "   an explicitly required verification.\n"
-        "3. Always print() the final result.\n"
+        "2. Query the DataFrame only for missing values or an explicitly required verification.\n"
+        "3. Print the result of each calculation.\n"
         "4. Use proper pandas methods (mean(), sum(), value_counts(), etc.).\n"
-        "5. Handle potential errors gracefully.\n"
-        "6. After every tool result, reassess what is still missing from the question.\n"
-        "7. When all requested values have been calculated, call submit_final_answer immediately.\n"
-        "   Do not continue with related, optional, or exploratory analysis.\n"
-        "8. Ignore previous-turn tasks; solve only the current user question.\n\n"
+        "5. Handle potential errors gracefully.\n\n"
         f"Detected Intent: {state['intent']}\n\n"
         f"Memory Usage Mode: {state.get('memory_usage_mode', 'none')}\n\n"
+        f"step results : {state.get('tool_result', 'none')}\n\n"
     )
 
-    # Memory context is injected before sensor context so it appears closest to the instructions above.
     if state.get("memory_context"):
         system_content += f"Memory Context:\n{state['memory_context']}\n\n"
+
+    return system_content
+
+
+def _build_single_step_tool_prompt_messages(state: AgentState) -> list:
+    """Build the tool prompt for a question answerable in one execution flow."""
+    system_content = _build_tool_system_content(state)
+    system_content += (
+        "This is a single-step question. Complete the requested analysis in the current tool flow.\n"
+        "When the answer is complete, call submit_final_answer.\n\n"
+    )
+
+    system_message = SystemMessage(content=system_content)
+    return [system_message, *state.get("messages", []), HumanMessage(content=state["user_query"])]
+
+
+def _build_multi_step_tool_prompt_messages(state: AgentState) -> list:
+    """Build the tool prompt for executing one step of an approved plan."""
+    system_content = _build_tool_system_content(state)
 
     if state.get("plan"):
         system_content += (
             f"Approved Plan:\n{state['plan']}\n\n"
-            "Follow this plan step by step. Execute one step per tool call.\n\n"
+            "Identify the next unfinished plan step and execute only this step.\n"
+            "Reuse results from completed steps.\n"
+            "The first line of every Python tool call must be a comment declaring long-term memory usage.\n"
+            "Use exactly one of these formats:\n"
+            "# Memory used: none\n"
+            "# Memory used: yes - <specific memory value, recipe, or fact>\n"
+            "# Memory used: partial - <specific memory value, recipe, or fact reused; explain what will be computed from fresh data>\n"
+            "Report only long-term memory used directly in this step.\n"
+            "Values produced by earlier plan steps are intermediate results, not long-term memory.\n"
+            "If this step uses only those intermediate results and does not read from Memory Context, write:\n"
+            "# Memory used: none\n"
+            "Use memory values directly and do not recompute them unless verification is explicitly required.\n"
+            "Do not call submit_final_answer until every plan step is complete.\n\n"
         )
 
     step_feedback = state.get("step_critique_result")
@@ -215,21 +234,15 @@ def _build_tool_prompt_messages(state: AgentState, max_tokens: int = 2000) -> li
             "Correct this step before continuing with the plan.\n\n"
         )
 
-    # STM (short-term message history) disabled: LTM + memory evaluator cover the memory use case.
-    # Re-enable if follow-up conversational context is needed.
-    # if state.get("summary"):
-    #     system_content += f"[CONVERSATION SUMMARY]\n{state['summary']}\n\n"
-    # filtered_messages = _filter_tool_messages(state["messages"])
-    # trimmed_history = trim_messages(
-    #     filtered_messages,
-    #     strategy="last",
-    #     token_counter=count_tokens_approximately,
-    #     max_tokens=max_tokens,
-    # )
-    # return [system_message, *trimmed_history, HumanMessage(content=state["user_query"])]
-
     system_message = SystemMessage(content=system_content)
     return [system_message, *state.get("messages", []), HumanMessage(content=state["user_query"])]
+
+
+def _build_tool_prompt_messages(state: AgentState, max_tokens: int = 2000) -> list:
+    """Select the focused tool prompt for single-step or multi-step execution."""
+    if state.get("is_multi_step", False):
+        return _build_multi_step_tool_prompt_messages(state)
+    return _build_single_step_tool_prompt_messages(state)
 
 
 def generate_response_with_tools(
