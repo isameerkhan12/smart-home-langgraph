@@ -121,6 +121,9 @@ def initial_state(
         "memory_context": "",
         "error_memory_context": "",
         "error_signature": "",
+        # Step-specific memory (for multi-step queries)
+        "step_specific_memory": "",
+        "current_step": 0,
         # Memory evaluator decision
         "tools_usage": True,
         "memory_usage_mode": "none",
@@ -272,6 +275,45 @@ def build_workflow(
             memories = store.search(memory_namespace(config), query=state["user_query"], limit=8)
             memory_context = format_memories_for_prompt(memories)
         return {**state, "memory_context": memory_context}
+
+    def retrieve_step_memory_node(state: AgentState,config: RunnableConfig | None = None,*,store: BaseStore | None = None,) -> AgentState:
+        """
+        Retrieve step-specific memory for the current step in a multi-step plan.
+        
+        Only runs for multi-step queries. Retrieves top 1-2 most relevant memories
+        specific to the current step description, keeping context focused and token-efficient.
+        
+        Returns state with:
+          - step_specific_memory: Top 1-2 relevant results for this step
+          - current_step: Step number (for reference)
+        """
+        # Skip for single-step queries
+        if not state.get("plan"):
+            return state
+        
+        # Parse current step from plan (handle string or dict formats)
+        plan = state.get("plan", "")
+        current_step = state.get("current_step", 0)
+        
+        # Extract step description for targeted search
+        step_query = f"Step {current_step}: {plan}"[:200]  # Limit query length
+        
+        if store is None:
+            step_memory = "No long-term memory store configured for step-specific retrieval."
+        else:
+            # Strict retrieval: only top 1-2 results, high relevance threshold
+            memories = store.search(
+                memory_namespace(config),
+                query=step_query,
+                limit=2  # ← Strict: only top 2
+            )
+            step_memory = format_memories_for_prompt(memories)
+        
+        return {
+            **state,
+            "step_specific_memory": step_memory,
+            "current_step": current_step,
+        }
 
     def memory_evaluator_node(state: AgentState) -> AgentState:
         """
@@ -783,6 +825,7 @@ def build_workflow(
     # Add all nodes
     graph.add_node("detect_intent", detect_intent)
     graph.add_node("retrieve_context", retrieve_context)
+    graph.add_node("retrieve_step_memory", retrieve_step_memory_node)  # NEW: Step-specific memory
     graph.add_node("memory_evaluator", memory_evaluator_node)
     # Kept for future multi-turn conversation support
     graph.add_node("summarize", summarize_node)
@@ -820,8 +863,11 @@ def build_workflow(
     graph.add_conditional_edges(
         "plan_critique",
         route_after_plan_critique,
-        {"generate_response": "generate_response", "propose_plan": "propose_plan"},
+        {"generate_response": "retrieve_step_memory", "propose_plan": "propose_plan"},  # NEW: route to retrieve_step_memory first
     )
+    
+    # NEW: Retrieve step-specific memory before generating response for current step
+    graph.add_edge("retrieve_step_memory", "generate_response")
 
     # After generate_response: use safe_tools_condition to route (LLM decides)
     graph.add_conditional_edges(
@@ -841,7 +887,10 @@ def build_workflow(
             "step_critique": "step_critique",
         },
     )
-    graph.add_edge("step_critique", "generate_response")
+    
+    # NEW: After step_critique, retrieve memory for next step (if multi-step)
+    # Then loop back to generate_response for the next step
+    graph.add_edge("step_critique", "retrieve_step_memory")
 
     # Critique/repair loop
     graph.add_conditional_edges(

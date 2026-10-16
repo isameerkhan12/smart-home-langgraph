@@ -88,6 +88,7 @@ class AgentState(TypedDict):
 
     # ---- Context (populated by retrieve_context node) ----------------------
     # Long-term memory context assembled from mistakes, recipes, preferences.
+    # Used globally for all single-step queries and as fallback for multi-step.
     memory_context: str
 
     # Error-focused memory context retrieved for repair attempts.
@@ -95,6 +96,15 @@ class AgentState(TypedDict):
 
     # Normalized error signature used for deduping and retrieval.
     error_signature: str
+
+    # ---- Step-specific context (populated by retrieve_step_memory node) -----
+    # Memory context specific to the current step in multi-step execution.
+    # Only populated for multi-step queries; empty for single-step.
+    # Limited to top 1-2 most relevant results (strict retrieval).
+    step_specific_memory: str
+
+    # Current step number in the plan (for retrieve_step_memory targeting).
+    current_step: int
 
     # ---- Planner decision (populated by memory_evaluator node) --------------
     # True when tools should be bound and available to the generation path.

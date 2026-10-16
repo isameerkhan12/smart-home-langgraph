@@ -56,20 +56,31 @@ def _provider_api_key_name(settings) -> str:
 
 
 def _build_prompt_messages(state: AgentState, max_tokens: int = 2000) -> list:
-    """Build a chat-style prompt trimmed to token limit using LangChain's trim_messages."""
+    """
+    Build a chat-style prompt with both global and step-specific memory contexts.
+    
+    For multi-step queries:
+      - Includes global memory (overall context)
+      - Includes step-specific memory (current step focus, top 1-2 results)
+    
+    For single-step queries:
+      - Uses only global memory
+    """
     system_content = (
         "You are a smart-home assistant.\n"
         "Use the provided memory context and tools for data analysis.\n"
         "Carry context forward across the conversation when the user asks follow-up questions.\n"
         "Prioritize: safety, avoid known mistakes, reuse proven recipe, and obey preferences.\n\n"
         f"Detected Intent:\n{state['intent']}\n\n"
-        f"Memory Context:\n{state['memory_context']}\n\n"
     )
-    # STM (short-term message history) disabled: this is a data analysis agent, not a chatbot.
-    # LTM + memory evaluator cover the memory use case. Re-enable if follow-up conversational context is needed.
-    # if state.get("summary"):
-    #     system_content += f"[CONVERSATION SUMMARY]\n{state['summary']}\n\n"
-
+    
+    # Include global memory for all queries
+    system_content += f"Global Memory Context:\n{state['memory_context']}\n\n"
+    
+    # For multi-step queries, include step-specific memory (strict, focused context)
+    if state.get("step_specific_memory"):
+        system_content += f"For This Step:\n{state['step_specific_memory']}\n\n"
+    
     system_content += "Return a concise actionable answer in 4-6 bullet points."
 
     system_message = SystemMessage(content=system_content)
