@@ -9,9 +9,20 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 
-class PlannerDecision(BaseModel):
-    """Decision from memory evaluator: tool usage + memory coverage mode."""
+class UsedMemory(BaseModel):
+    """One retrieved memory the evaluator judged useful for the question."""
 
+    memory: str = Field(description="The memory text copied exactly from the retrieved memories, without paraphrasing")
+    why_useful: str = Field(default="", description="Brief note on how this memory helps answer the question")
+
+
+class PlannerDecision(BaseModel):
+    """Decision from memory evaluator: tool usage + memory coverage mode + selected memories."""
+
+    used_memories: list[UsedMemory] = Field(
+        default_factory=list,
+        description="Retrieved memories that are useful for this question (empty when none are useful)",
+    )
     tools_usage: bool = Field(description="True when tools should be used for this question")
     memory_usage_mode: Literal["memory_only", "partial", "none"] = Field(
         description="How much the answer can rely on memory: memory_only, partial, or none"

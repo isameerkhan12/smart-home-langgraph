@@ -101,6 +101,9 @@ def render_tool_output(tool_output: object, indent: int = 0) -> str:
     return f"{prefix}{tool_output}"
 
 
+_STEP_START = r"\W*(?:step\s*)?\d+\s*[.):]"
+
+
 def initial_state(
     query: str,
     max_repairs: int = 2,
@@ -123,11 +126,12 @@ def initial_state(
         "error_signature": "",
         # Step-specific memory (for multi-step queries)
         "step_specific_memory": "",
-        "current_step": 0,
+        "current_step": 1,
         # Memory evaluator decision
         "tools_usage": True,
         "memory_usage_mode": "none",
         "planner_reason": "",
+        "selected_memories": "",
         # Plan (multi-step questions only)
         "plan": "",
         "is_multi_step": False,
@@ -277,57 +281,30 @@ def build_workflow(
         return {**state, "memory_context": memory_context}
 
     def retrieve_step_memory_node(state: AgentState,config: RunnableConfig | None = None,*,store: BaseStore | None = None,) -> AgentState:
-        """
-        Retrieve step-specific memory for the current step in a multi-step plan.
-        
-        Only runs for multi-step queries. Retrieves top 1-2 most relevant memories
-        specific to the current step description, keeping context focused and token-efficient.
-        
-        Returns state with:
-          - step_specific_memory: Top 1-2 relevant results for this step
-          - current_step: Step number (for reference)
-        """
-        # Skip for single-step queries
-        if not state.get("plan"):
-            return state
-        
-        # Parse current step from plan (handle string or dict formats)
-        plan = state.get("plan", "")
-        current_step = state.get("current_step", 0)
-        
-        # Extract step description for targeted search
-        step_query = f"Step {current_step}: {plan}"[:200]  # Limit query length
-        
-        if store is None:
-            step_memory = "No long-term memory store configured for step-specific retrieval."
-        else:
-            # Strict retrieval: only top 1-2 results, high relevance threshold
-            memories = store.search(
-                memory_namespace(config),
-                query=step_query,
-                limit=2  # ← Strict: only top 2
-            )
-            step_memory = format_memories_for_prompt(memories)
-        
-        return {
-            **state,
-            "step_specific_memory": step_memory,
-            "current_step": current_step,
-        }
+        """Retrieve the top-2 memories for the plan step about to run (step_critique_node advances current_step)."""
+        steps = [s for s in re.split(rf"\n(?={_STEP_START})", state["plan"], flags=re.I) if re.match(_STEP_START, s, re.I)]
+        # Past the last step only the final answer remains, so reuse the last step's text.
+        step_query = steps[min(state["current_step"], len(steps)) - 1] if steps else state["user_query"]
+        memories = store.search(memory_namespace(config), query=step_query, limit=2) if store else []
+        return {**state, "step_specific_memory": format_memories_for_prompt(memories)}
 
     def memory_evaluator_node(state: AgentState) -> AgentState:
         """
         Decide whether memory is sufficient to answer the question.
         
         Sets tools_usage flag, memory_usage_mode, and is_multi_step for downstream routing.
+        Also records which retrieved memories it judged useful (selected_memories), which
+        is the only memory the planner sees.
         """
         decision = evaluate_memory_sufficiency(state)
+        selected = "\n".join(f"- {m.memory} (useful because: {m.why_useful})" for m in decision.used_memories)
         return {
             **state,
             "tools_usage": decision.tools_usage,
             "memory_usage_mode": decision.memory_usage_mode,
             "is_multi_step": decision.is_multi_step,
             "planner_reason": decision.reason,
+            "selected_memories": selected,
         }
 
     def propose_plan_node(state: AgentState) -> AgentState:
@@ -348,12 +325,14 @@ def build_workflow(
     def step_critique_node(state: AgentState) -> AgentState:
         """Evaluate the most recently executed step of a multi-step plan."""
         result = critique_step(state)
+        # Passing (or exhausting the retry budget) moves on to the next plan step.
+        next_step = state["current_step"] + 1
         if result["passed"]:
-            return {**state, "step_critique_result": result}
+            return {**state, "step_critique_result": result, "current_step": next_step}
 
         if state.get("step_repair_count", 0) >= state.get("max_step_repairs", 0):
             # Step retry budget exhausted: stop flagging and rely on the final critique/repair loop.
-            return {**state, "step_critique_result": {**result, "passed": True}}
+            return {**state, "step_critique_result": {**result, "passed": True}, "current_step": next_step}
 
         return {
             **state,

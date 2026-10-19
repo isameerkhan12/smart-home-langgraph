@@ -214,6 +214,7 @@ def _build_memory_critique_prompt(state: AgentState) -> str:
 
 def _build_plan_critique_prompt(state: AgentState) -> str:
     """Build a critique prompt for a proposed step-by-step plan, before execution."""
+    selected_memory = state["selected_memories"] or "(none selected)"
     return (
         "You are a strict reviewer for a proposed data-analysis plan.\n"
         "No code has executed yet. Judge only whether the plan's approach is sound.\n\n"
@@ -226,6 +227,7 @@ def _build_plan_critique_prompt(state: AgentState) -> str:
         "     If a step says it reuses memory, the 'Memory used:' line should describe a relevant memory item or prior context, not a vague placeholder.\n"
         "     If a step says it does not use memory, it should say 'Memory used: none' without claiming otherwise.\n\n"
         f"{_build_query_context(state)}"
+        f"Memory available to the planner:\n{selected_memory}\n\n"
         f"Proposed Plan:\n{state.get('plan', '')}\n\n"
         "Return a JSON object with:\n"
         '  "passed": true/false\n'

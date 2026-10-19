@@ -39,11 +39,23 @@ Also decide is_multi_step:
   step needs the result of an earlier step (e.g. "find X, then using X compute Y").
 - false for single-step lookups or single calculations.
 
-Respond with a JSON object:
+Also select the memories that are useful for this question:
+- used_memories lists every retrieved memory you relied on for your decision, and only those.
+- Copy each memory EXACTLY as written in the Memory Context (you may omit the leading "- [type] " marker). Never paraphrase, shorten, or merge memories.
+- why_useful is one short sentence on how that memory helps answer this question.
+- Use an empty list when memory_usage_mode is "none".
+
+Respond with a pretty-printed JSON object (2-space indentation, one key per line, one list item per block):
 {
-    "tools_usage": true/false,
-    "memory_usage_mode": "memory_only" | "partial" | "none",
-    "is_multi_step": true/false,
+  "tools_usage": true/false,
+  "memory_usage_mode": "memory_only" | "partial" | "none",
+  "is_multi_step": true/false,
+  "used_memories": [
+    {
+      "memory": "<exact memory text>",
+      "why_useful": "<short note>"
+    }
+  ],
   "reason": "brief explanation (1 sentence)"
 }
 
@@ -103,7 +115,10 @@ def evaluate_memory_sufficiency(state: AgentState) -> PlannerDecision:
     try:
         model = build_model(settings, temperature=0.0)
         result = model.invoke(prompt_messages)
-        return result_to_model(result, PlannerDecision)
+        decision = result_to_model(result, PlannerDecision)
+        # Drop anything that is not an exact quote of a retrieved memory.
+        decision.used_memories = [m for m in decision.used_memories if m.memory.strip() in memory_context]
+        return decision
     except Exception as exc:  # noqa: BLE001 - robust fallback on any error
         # On error, default to tools (safer to compute than give wrong answer)
         return PlannerDecision(

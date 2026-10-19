@@ -103,7 +103,7 @@ class AgentState(TypedDict):
     # Limited to top 1-2 most relevant results (strict retrieval).
     step_specific_memory: str
 
-    # Current step number in the plan (for retrieve_step_memory targeting).
+    # 1-based number of the plan step being executed.
     current_step: int
 
     # ---- Planner decision (populated by memory_evaluator node) --------------
@@ -115,6 +115,10 @@ class AgentState(TypedDict):
 
     # Explanation from memory evaluator for the decision.
     planner_reason: str
+
+    # Memories the evaluator judged useful (exact text + why), rendered for prompts.
+    # The planner and plan critique see this instead of memory_context.
+    selected_memories: str
 
     # ---- Plan (populated by propose_plan / plan_critique nodes) ------------
     # Proposed step-by-step strategy for multi-step questions. Empty when not multi-step.

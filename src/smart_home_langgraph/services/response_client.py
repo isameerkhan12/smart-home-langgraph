@@ -56,31 +56,20 @@ def _provider_api_key_name(settings) -> str:
 
 
 def _build_prompt_messages(state: AgentState, max_tokens: int = 2000) -> list:
-    """
-    Build a chat-style prompt with both global and step-specific memory contexts.
-    
-    For multi-step queries:
-      - Includes global memory (overall context)
-      - Includes step-specific memory (current step focus, top 1-2 results)
-    
-    For single-step queries:
-      - Uses only global memory
-    """
+    """Build a chat-style prompt trimmed to token limit using LangChain's trim_messages."""
     system_content = (
         "You are a smart-home assistant.\n"
         "Use the provided memory context and tools for data analysis.\n"
         "Carry context forward across the conversation when the user asks follow-up questions.\n"
         "Prioritize: safety, avoid known mistakes, reuse proven recipe, and obey preferences.\n\n"
         f"Detected Intent:\n{state['intent']}\n\n"
+        f"Memory Context:\n{state['memory_context']}\n\n"
     )
-    
-    # Include global memory for all queries
-    system_content += f"Global Memory Context:\n{state['memory_context']}\n\n"
-    
-    # For multi-step queries, include step-specific memory (strict, focused context)
-    if state.get("step_specific_memory"):
-        system_content += f"For This Step:\n{state['step_specific_memory']}\n\n"
-    
+    # STM (short-term message history) disabled: this is a data analysis agent, not a chatbot.
+    # LTM + memory evaluator cover the memory use case. Re-enable if follow-up conversational context is needed.
+    # if state.get("summary"):
+    #     system_content += f"[CONVERSATION SUMMARY]\n{state['summary']}\n\n"
+
     system_content += "Return a concise actionable answer in 4-6 bullet points."
 
     system_message = SystemMessage(content=system_content)
@@ -145,13 +134,17 @@ def _build_plan_prompt_messages(state: AgentState) -> list:
         "Do not write Python code or call any tool. Only describe the plan.\n\n"
         f"Detected Intent: {state['intent']}\n\n"
     )
-    if state.get("memory_context"):
+    if state["selected_memories"]:
         system_content += (
-            f"Memory Context:\n{state['memory_context']}\n\n"
+            f"Relevant Memory (pre-selected for this question):\n{state['selected_memories']}\n\n"
             "Decide whether this memory is relevant to each plan step.\n"
             "At the top of the plan, include a 'Memory usage:' line stating whether the plan uses memory overall or is built from scratch.\n"
             "For every step, include exactly one line in this format: 'Memory used: yes|partial|no - <brief description>'.\n"
             "Use 'yes' when the step is based entirely on memory, 'partial' when it combines memory with fresh computation, and 'no - none' when it is computed entirely from fresh data.\n\n"
+        )
+    else:
+        system_content += (
+            "No relevant memory is available. Build the plan from scratch and mark every step 'Memory used: no - none'.\n\n"
         )
 
     plan_critique = state.get("plan_critique_result")
@@ -222,8 +215,10 @@ def _build_multi_step_tool_prompt_messages(state: AgentState) -> list:
 
     if state.get("plan"):
         system_content += (
+            f"Memory retrieved for the current step:\n{state['step_specific_memory']}\n\n"
+            "Prefer this step memory when it applies; the Memory Context above is the broader background.\n\n"
             f"Approved Plan:\n{state['plan']}\n\n"
-            "Identify the next unfinished plan step and execute only this step.\n"
+            f"You are executing plan step {state['current_step']}. Execute only this step.\n"
             "Reuse results from completed steps.\n"
             "The first line of every Python tool call must be a comment declaring long-term memory usage.\n"
             "Use exactly one of these formats:\n"
