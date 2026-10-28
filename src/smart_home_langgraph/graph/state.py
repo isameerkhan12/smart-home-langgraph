@@ -106,19 +106,18 @@ class AgentState(TypedDict):
     # 1-based number of the plan step being executed.
     current_step: int
 
-    # ---- Planner decision (populated by memory_evaluator node) --------------
+    # ---- Memory evaluator decision ------------------------------------------
     # True when tools should be bound and available to the generation path.
     tools_usage: bool
 
-    # Memory coverage mode decided by evaluator: memory_only, partial, or none.
-    memory_usage_mode: Literal["memory_only", "partial", "none"]
+    # Set-level memory verdict decided by the evaluator.
+    memory_set_verdict: Literal["sufficient", "supportive", "irrelevant"]
 
-    # Explanation from memory evaluator for the decision.
-    planner_reason: str
+    # Explanation from the memory evaluator for the decision.
+    memory_evaluator_reason: str
 
-    # Memories the evaluator judged useful (exact text + why), rendered for prompts.
-    # The planner and plan critique see this instead of memory_context.
-    selected_memories: str
+    # Per-memory assessments produced by the memory evaluator.
+    memory_evaluations: list[dict[str, str]]
 
     # ---- Plan (populated by propose_plan / plan_critique nodes) ------------
     # Proposed step-by-step strategy for multi-step questions. Empty when not multi-step.

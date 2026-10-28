@@ -41,9 +41,9 @@ flowchart TD
 
 The **memory_evaluator** node decides whether memory is sufficient to answer the user's question, and whether the question needs a multi-step plan:
 
-- **`memory_usage_mode = memory_only`**: Memory contains the answer → `generate_response` and `repair_response` run **without tools bound** (LLM physically cannot call analysis tools)
-- **`memory_usage_mode = partial`**: Memory contains some facts → tools are available for missing facts, and the response combines memory with tool results
-- **`memory_usage_mode = none`**: Computation is needed → tools are available for the full analysis
+- **`memory_set_verdict = sufficient`**: Memory contains the answer → `generate_response` and `repair_response` run **without tools bound** (LLM physically cannot call analysis tools)
+- **`memory_set_verdict = supportive`**: Memory contains useful but incomplete context → tools are available for missing facts, and the response combines memory with tool results
+- **`memory_set_verdict = irrelevant`**: Retrieved memories do not affect the answer → tools are available for the full analysis
 - **`is_multi_step`**: True when the question requires several dependent calculation steps (a later step needs an earlier step's result) — routes through the plan/plan-critique loop before any code executes. Single-step questions skip planning entirely.
 
 This prevents redundant tool calls when the answer already exists in long-term memory, and prevents multi-step questions from starting execution on an unreviewed approach.

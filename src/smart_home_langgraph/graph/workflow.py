@@ -129,9 +129,9 @@ def initial_state(
         "current_step": 1,
         # Memory evaluator decision
         "tools_usage": True,
-        "memory_usage_mode": "none",
-        "planner_reason": "",
-        "selected_memories": "",
+        "memory_set_verdict": "irrelevant",
+        "memory_evaluator_reason": "",
+        "memory_evaluations": [],
         # Plan (multi-step questions only)
         "plan": "",
         "is_multi_step": False,
@@ -237,7 +237,7 @@ def build_workflow(
             content = item.value.get("content", "").strip()
             memory_type = item.value.get("memory_type", MemoryType.GENERAL.value)
             if content:
-                lines.append(f"- [{memory_type}] {content}")
+                lines.append(f"- id={item.key}; type=[{memory_type}]; text={content}")
         return "\n".join(lines) if lines else "No relevant long-term memories found."
 
     def build_error_signature(state: AgentState) -> str:
@@ -292,19 +292,17 @@ def build_workflow(
         """
         Decide whether memory is sufficient to answer the question.
         
-        Sets tools_usage flag, memory_usage_mode, and is_multi_step for downstream routing.
-        Also records which retrieved memories it judged useful (selected_memories), which
-        is the only memory the planner sees.
+        Sets tools_usage flag, memory_set_verdict, and is_multi_step for downstream routing.
+        Also stores the evaluator's per-memory assessments for downstream planning.
         """
         decision = evaluate_memory_sufficiency(state)
-        selected = "\n".join(f"- {m.memory} (useful because: {m.why_useful})" for m in decision.used_memories)
         return {
             **state,
             "tools_usage": decision.tools_usage,
-            "memory_usage_mode": decision.memory_usage_mode,
+            "memory_set_verdict": decision.memory_set_verdict,
             "is_multi_step": decision.is_multi_step,
-            "planner_reason": decision.reason,
-            "selected_memories": selected,
+            "memory_evaluator_reason": decision.overall_reason,
+            "memory_evaluations": [m.model_dump() for m in decision.memory_evaluations],
         }
 
     def propose_plan_node(state: AgentState) -> AgentState:
@@ -586,7 +584,7 @@ def build_workflow(
             base_state = {
                 **state,
                 "tools_usage": True,
-                "memory_usage_mode": "none",
+                "memory_set_verdict": "irrelevant",
                 "memory_context": "No relevant long-term memories found.",
             }
 

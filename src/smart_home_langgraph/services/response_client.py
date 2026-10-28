@@ -134,17 +134,17 @@ def _build_plan_prompt_messages(state: AgentState) -> list:
         "Do not write Python code or call any tool. Only describe the plan.\n\n"
         f"Detected Intent: {state['intent']}\n\n"
     )
-    if state["selected_memories"]:
+    if state["memory_evaluations"]:
         system_content += (
-            f"Relevant Memory (pre-selected for this question):\n{state['selected_memories']}\n\n"
-            "Decide whether this memory is relevant to each plan step.\n"
-            "At the top of the plan, include a 'Memory usage:' line stating whether the plan uses memory overall or is built from scratch.\n"
-            "For every step, include exactly one line in this format: 'Memory used: yes|partial|no - <brief description>'.\n"
-            "Use 'yes' when the step is based entirely on memory, 'partial' when it combines memory with fresh computation, and 'no - none' when it is computed entirely from fresh data.\n\n"
+            f"Memory Evaluator Assessments:\n{state['memory_evaluations']}\n\n"
+            "Use these per-memory assessments when deciding how memory applies to each plan step.\n"
+            "At the top of the plan, include a 'Memory set verdict:' line using exactly one of: sufficient, supportive, irrelevant.\n"
+            "For each memory relevant to a step, include a line in this format: 'Memory contribution: <memory id> - complete|partial|guidance|unrelated - <brief description>'.\n"
+            "If no memory applies to a step, write: 'Memory contribution: none - unrelated - no retrieved memory applies'.\n\n"
         )
     else:
         system_content += (
-            "No relevant memory is available. Build the plan from scratch and mark every step 'Memory used: no - none'.\n\n"
+            "No relevant memory is available. Build the plan from scratch and mark every step 'Memory contribution: none - unrelated - no retrieved memory applies'.\n\n"
         )
 
     plan_critique = state.get("plan_critique_result")
@@ -187,7 +187,7 @@ def _build_tool_system_content(state: AgentState) -> str:
         "4. Use proper pandas methods (mean(), sum(), value_counts(), etc.).\n"
         "5. Handle potential errors gracefully.\n\n"
         f"Detected Intent: {state['intent']}\n\n"
-        f"Memory Usage Mode: {state.get('memory_usage_mode', 'none')}\n\n"
+        f"Memory Set Verdict: {state.get('memory_set_verdict', 'irrelevant')}\n\n"
         f"step results : {state.get('tool_result', 'none')}\n\n"
     )
 

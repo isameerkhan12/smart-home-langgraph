@@ -29,10 +29,10 @@ def _build_query_context(state: AgentState) -> str:
 
 def _build_shared_critique_prompt(state: AgentState) -> str:
     """Build the shared critique context used by response-evaluating prompt variants."""
-    memory_usage_mode = state.get("memory_usage_mode", "none")
+    memory_set_verdict = state.get("memory_set_verdict", "irrelevant")
     memory_context = state.get("memory_context", "")
 
-    shared = _build_query_context(state) + f"Memory Usage Mode: {memory_usage_mode}\n\n"
+    shared = _build_query_context(state) + f"Memory Set Verdict: {memory_set_verdict}\n\n"
     if memory_context and "No relevant" not in memory_context and "No long-term" not in memory_context:
         shared += f"Retrieved Memory Context:\n{memory_context}\n\n"
     shared += f"Response to Evaluate:\n{state['response']}\n\n"
@@ -214,7 +214,7 @@ def _build_memory_critique_prompt(state: AgentState) -> str:
 
 def _build_plan_critique_prompt(state: AgentState) -> str:
     """Build a critique prompt for a proposed step-by-step plan, before execution."""
-    selected_memory = state["selected_memories"] or "(none selected)"
+    memory_evaluations = state.get("memory_evaluations", []) or "(none available)"
     return (
         "You are a strict reviewer for a proposed data-analysis plan.\n"
         "No code has executed yet. Judge only whether the plan's approach is sound.\n\n"
@@ -223,11 +223,11 @@ def _build_plan_critique_prompt(state: AgentState) -> str:
         "  2. Are the steps logically ordered, with later steps correctly depending on earlier results?\n"
         "  3. Does the plan avoid unnecessary or irrelevant steps?\n"
         "  4. Is the plan specific enough to be executed as code (not vague)?\n"
-        "  5. Does the plan correctly state when it is using memory versus fresh computation?\n"
-        "     If a step says it reuses memory, the 'Memory used:' line should describe a relevant memory item or prior context, not a vague placeholder.\n"
-        "     If a step says it does not use memory, it should say 'Memory used: none' without claiming otherwise.\n\n"
+        "  5. Does the plan correctly apply the memory evaluator's contribution labels?\n"
+        "     Each memory contribution line must use complete, partial, guidance, or unrelated.\n"
+        "     A step with no applicable memory should use 'Memory contribution: none - unrelated'.\n\n"
         f"{_build_query_context(state)}"
-        f"Memory available to the planner:\n{selected_memory}\n\n"
+        f"Memory evaluator assessments:\n{memory_evaluations}\n\n"
         f"Proposed Plan:\n{state.get('plan', '')}\n\n"
         "Return a JSON object with:\n"
         '  "passed": true/false\n'
@@ -339,15 +339,15 @@ def critique_response(state: AgentState) -> CritiqueResult:
         return skipped
 
     tool_result = state.get("tool_result")
-    memory_usage_mode = state.get("memory_usage_mode", "none")
+    memory_set_verdict = state.get("memory_set_verdict", "irrelevant")
 
-    if memory_usage_mode != "memory_only" and tool_result and not tool_result.get("success", True):
+    if memory_set_verdict != "sufficient" and tool_result and not tool_result.get("success", True):
         return _execution_failure_result(tool_result)
 
     # Route to prompt matching the evidence available for this response.
-    if memory_usage_mode == "memory_only":
+    if memory_set_verdict == "sufficient":
         prompt = _build_memory_critique_prompt(state)
-    elif memory_usage_mode == "partial":
+    elif memory_set_verdict == "supportive":
         prompt = _build_partial_critique_prompt(state)
     else:
         prompt = _build_code_critique_prompt(state)

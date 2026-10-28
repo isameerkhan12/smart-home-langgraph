@@ -9,37 +9,38 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 
-class UsedMemory(BaseModel):
-    """One retrieved memory the evaluator judged useful for the question."""
+class MemoryEvaluation(BaseModel):
+    """Evaluator verdict for one retrieved memory."""
 
-    memory: str = Field(description="The memory text copied exactly from the retrieved memories, without paraphrasing")
-    why_useful: str = Field(default="", description="Brief note on how this memory helps answer the question")
+    id: str = Field(description="The memory id from the Memory Context")
+    memory: str = Field(description="The memory text copied exactly from the Memory Context, without paraphrasing")
+    contribution: Literal["complete", "partial", "guidance", "unrelated"] = Field(
+        description="How this memory contributes to answering the question"
+    )
+    reason: str = Field(default="", description="Short reason for the verdict")
 
 
 class PlannerDecision(BaseModel):
-    """Decision from memory evaluator: tool usage + memory coverage mode + selected memories."""
+    """Decision from memory evaluator."""
 
-    used_memories: list[UsedMemory] = Field(
+    memory_evaluations: list[MemoryEvaluation] = Field(
         default_factory=list,
-        description="Retrieved memories that are useful for this question (empty when none are useful)",
+        description="One verdict per retrieved memory",
+    )
+    memory_set_verdict: Literal["sufficient", "supportive", "irrelevant"] = Field(
+        description="Whether the memories are sufficient, supportive, or irrelevant"
     )
     tools_usage: bool = Field(description="True when tools should be used for this question")
-    memory_usage_mode: Literal["memory_only", "partial", "none"] = Field(
-        description="How much the answer can rely on memory: memory_only, partial, or none"
-    )
     is_multi_step: bool = Field(
         default=False,
         description="True when the question requires multiple dependent calculation steps",
     )
-    reason: str = Field(description="Brief explanation for the decision")
+    overall_reason: str = Field(description="Brief explanation for the set-level decision")
 
     @model_validator(mode="after")
     def enforce_consistency(self) -> "PlannerDecision":
-        """Keep tool-usage flag and memory mode internally consistent."""
-        if self.memory_usage_mode == "memory_only":
-            self.tools_usage = False
-        else:
-            self.tools_usage = True
+        """Keep tool usage consistent with the set-level verdict."""
+        self.tools_usage = self.memory_set_verdict != "sufficient"
         return self
 
 
