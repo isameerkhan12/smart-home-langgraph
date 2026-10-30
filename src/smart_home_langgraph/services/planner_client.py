@@ -8,7 +8,7 @@
 # ---------------------------------------------------------------------------
 from __future__ import annotations
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import SystemMessage
 
 from smart_home_langgraph.config.settings import get_settings
 from smart_home_langgraph.graph.state import AgentState
@@ -21,6 +21,11 @@ MEMORY_EVALUATOR_PROMPT = """\
 You are a planning assistant. Given a question and retrieved memories, produce
 three kinds of output: a task-level annotation, an entry-level assessment of
 each memory, and a set-level decision derived from those assessments.
+
+Question: {question}
+
+Memory Context (each memory has an id, a type, and text):
+{memories}
 
 Memory types: [recipe] = a working procedure or code approach. Other types hold
 facts, values, preferences, or past mistakes.
@@ -81,13 +86,11 @@ Respond ONLY with the JSON object."""
 
 def _build_memory_evaluator_prompt(state: AgentState) -> list:
     """Build the memory evaluator prompt messages."""
-    user_content = (
-        f"Question: {state['user_query']}\n\n"
-        f"Memory Context:\n{state.get('memory_context', 'No memory available.')}"
+    prompt = MEMORY_EVALUATOR_PROMPT.replace("{question}", state["user_query"]).replace(
+        "{memories}", state.get("memory_context", "No memory available.")
     )
     return [
-        SystemMessage(content=MEMORY_EVALUATOR_PROMPT),
-        HumanMessage(content=user_content),
+        SystemMessage(content=prompt),
     ]
 
 

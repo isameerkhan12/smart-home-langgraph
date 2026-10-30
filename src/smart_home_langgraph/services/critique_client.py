@@ -17,6 +17,7 @@ from smart_home_langgraph.graph.state import AgentState, CritiqueResult
 from smart_home_langgraph.services.json_utils import result_to_model
 from smart_home_langgraph.services.llm_schema import CritiqueDecision
 from smart_home_langgraph.services.model_factory import build_model
+from smart_home_langgraph.services.response_client import format_memory_assessment
 
 
 def _build_query_context(state: AgentState) -> str:
@@ -214,7 +215,6 @@ def _build_memory_critique_prompt(state: AgentState) -> str:
 
 def _build_plan_critique_prompt(state: AgentState) -> str:
     """Build a critique prompt for a proposed step-by-step plan, before execution."""
-    memory_evaluations = state.get("memory_evaluations", []) or "(none available)"
     return (
         "You are a strict reviewer for a proposed data-analysis plan.\n"
         "No code has executed yet. Judge only whether the plan's approach is sound.\n\n"
@@ -223,11 +223,11 @@ def _build_plan_critique_prompt(state: AgentState) -> str:
         "  2. Are the steps logically ordered, with later steps correctly depending on earlier results?\n"
         "  3. Does the plan avoid unnecessary or irrelevant steps?\n"
         "  4. Is the plan specific enough to be executed as code (not vague)?\n"
-        "  5. Does the plan correctly apply the memory evaluator's contribution labels?\n"
-        "     Each memory contribution line must use complete, partial, guidance, or unrelated.\n"
-        "     A step with no applicable memory should use 'Memory contribution: none - unrelated'.\n\n"
+        "  5. Does the plan reuse [complete] and [partial] memory values instead of recomputing them, and follow [guidance] memories?\n"
+        "     Fail the plan if it recomputes or verifies a memory value the user did not ask to verify.\n"
+        "  6. Is each step one computation that can run in a single Python call, with trivial steps merged?\n\n"
         f"{_build_query_context(state)}"
-        f"Memory evaluator assessments:\n{memory_evaluations}\n\n"
+        f"Memory (assessed by the memory evaluator):\n{format_memory_assessment(state)}\n\n"
         f"Proposed Plan:\n{state.get('plan', '')}\n\n"
         "Return a JSON object with:\n"
         '  "passed": true/false\n'
@@ -251,13 +251,11 @@ def _build_step_critique_prompt(state: AgentState) -> str:
         "  2. Did execution succeed without errors?\n"
         "  3. Are the computed values realistic and internally consistent for this step?\n"
         "  4. Is the step's result usable as input for the plan's remaining steps?\n"
-        "  5. Does the step's declared memory usage match reality?\n"
-        "     The executed Python code must begin with a '# Memory used:' comment.\n"
-        "     If the comment is missing, vague, or inconsistent with the code, set passed=false.\n"
-        "     If the code uses a value, recipe, or fact from Memory Context, the comment must identify it.\n"
-        "     If the code uses only results from completed plan steps, the comment must say '# Memory used: none'.\n"
-        "     Do not treat the plan's memory declaration as proof of actual memory usage.\n\n"
+        "  5. Does the code begin with a '# Plan step <n>: ...' comment naming the step it runs?\n"
+        "  6. Did the code reuse [complete] and [partial] memory values instead of recomputing them from the dataset?\n"
+        "     Recomputing a memory value the user did not ask to verify is a failure.\n\n"
         f"{_build_query_context(state)}"
+        f"Memory (assessed by the memory evaluator):\n{format_memory_assessment(state)}\n\n"
         f"Plan:\n{state.get('plan', '')}\n\n"
     )
 

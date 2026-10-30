@@ -55,33 +55,43 @@ def _provider_api_key_name(settings) -> str:
     return "API_KEY"
 
 
+DATA_CONTEXT = """\
+Dataset (House 1 energy data), preloaded as the pandas DataFrame `df`:
+- Time: datetime string; Unix: epoch seconds; timestamp: datetime (use it to filter by date or time).
+- Aggregate, Fridge, Chest_Freezer, Upright_Freezer, Tumble_Dryer, Washing_Machine, Dishwasher, Computer_Site, Television_Site, Electric_Heater: power in Watts.
+- Range: 2013-10-09 to 2015-07-10.
+- Energy in kWh is not stored; derive the sampling interval from `df['Unix'].diff()` instead of assuming it.
+- To convert power readings to energy, multiply each reading by the interval in seconds and divide by 3,600,000."""
+
+ANSWER_FORMAT = (
+    "Answer format: short bullet points, one fact per bullet with its value, unit, and period. "
+    "No introduction and no advice."
+)
+
+
+def format_memory_assessment(state: AgentState) -> str:
+    """Render the memory evaluator's verdict and non-unrelated memories for prompts."""
+    useful = [m for m in state.get("memory_evaluations", []) if m["contribution"] != "unrelated"]
+    lines = [f"Memory set verdict: {state.get('memory_set_verdict', 'irrelevant')}"]
+    lines += [f"- [{m['contribution']}] {m['memory']} ({m['reason']})" for m in useful]
+    if not useful:
+        lines.append("(no useful memory)")
+    return "\n".join(lines)
+
+
 def _build_prompt_messages(state: AgentState, max_tokens: int = 2000) -> list:
-    """Build a chat-style prompt trimmed to token limit using LangChain's trim_messages."""
+    """Build the memory-only answer prompt (no tools are bound on this path)."""
     system_content = (
-        "You are a smart-home assistant.\n"
-        "Use the provided memory context and tools for data analysis.\n"
-        "Carry context forward across the conversation when the user asks follow-up questions.\n"
-        "Prioritize: safety, avoid known mistakes, reuse proven recipe, and obey preferences.\n\n"
-        f"Detected Intent:\n{state['intent']}\n\n"
-        f"Memory Context:\n{state['memory_context']}\n\n"
+        "You are a smart-home data analysis assistant. The retrieved memory already contains the final answer.\n"
+        "Write the answer from memory only.\n\n"
+        f"Memory (assessed by the memory evaluator):\n{format_memory_assessment(state)}\n\n"
+        "Rules:\n"
+        "- Use only values that appear in the memory above; copy numbers, units, and periods exactly.\n"
+        "- Do not compute, estimate, or add facts that are not in the memory.\n"
+        "- If the memory does not fully answer the question, state which part is missing.\n\n"
+        f"{ANSWER_FORMAT}"
     )
-    # STM (short-term message history) disabled: this is a data analysis agent, not a chatbot.
-    # LTM + memory evaluator cover the memory use case. Re-enable if follow-up conversational context is needed.
-    # if state.get("summary"):
-    #     system_content += f"[CONVERSATION SUMMARY]\n{state['summary']}\n\n"
-
-    system_content += "Return a concise actionable answer in 4-6 bullet points."
-
-    system_message = SystemMessage(content=system_content)
-    # filtered_messages = _filter_tool_messages(state["messages"])
-    # trimmed_history = trim_messages(
-    #     filtered_messages,
-    #     strategy="last",
-    #     token_counter=count_tokens_approximately,
-    #     max_tokens=max_tokens,
-    # )
-    # return [system_message, *trim_messages, HumanMessage(content=state["user_query"])]
-    return [system_message, HumanMessage(content=state["user_query"])]
+    return [SystemMessage(content=system_content), HumanMessage(content=state["user_query"])]
 
 
 def _fallback_response(state: AgentState, reason: str) -> str:
@@ -126,36 +136,32 @@ def generate_response(
 
 
 def _build_plan_prompt_messages(state: AgentState) -> list:
-    """Build a prompt asking the LLM to propose a step-by-step strategy before executing."""
+    """Build the prompt that asks for a step-by-step plan before any code runs."""
     system_content = (
-        "You are a smart-home data analysis assistant. Before writing any code, "
-        "propose a short numbered plan of the dependent steps needed to answer the question.\n"
-        "Each step should state what will be computed and why it is needed for the next step.\n"
-        "Do not write Python code or call any tool. Only describe the plan.\n\n"
-        f"Detected Intent: {state['intent']}\n\n"
+        "You are a planning assistant for smart-home energy data analysis. "
+        "Propose a numbered plan for the question. Do not write code or call tools.\n\n"
+        f"{DATA_CONTEXT}\n\n"
+        f"Memory (assessed by the memory evaluator):\n{format_memory_assessment(state)}\n\n"
+        "Planning rules:\n"
+        "- Each step is one computation that runs as a single Python call. Merge trivial steps "
+        "(for example filtering and summing the same column) into one step.\n"
+        "- Use as few steps as the question needs; each step must use the result of an earlier step or the dataset.\n"
+        "- Take values from [complete] and [partial] memories as given. Do not recompute or verify them unless the user asks.\n"
+        "- Follow [guidance] memories for how to compute.\n"
+        "- Do not add data-quality or verification steps unless the user asks.\n"
+        "- The last step produces the final answer.\n\n"
+        "Output format, one line per step and nothing else:\n"
+        "Step <n>: <what is computed> | uses: <memory value, earlier step, or dataset>"
     )
-    if state["memory_evaluations"]:
-        system_content += (
-            f"Memory Evaluator Assessments:\n{state['memory_evaluations']}\n\n"
-            "Use these per-memory assessments when deciding how memory applies to each plan step.\n"
-            "At the top of the plan, include a 'Memory set verdict:' line using exactly one of: sufficient, supportive, irrelevant.\n"
-            "For each memory relevant to a step, include a line in this format: 'Memory contribution: <memory id> - complete|partial|guidance|unrelated - <brief description>'.\n"
-            "If no memory applies to a step, write: 'Memory contribution: none - unrelated - no retrieved memory applies'.\n\n"
-        )
-    else:
-        system_content += (
-            "No relevant memory is available. Build the plan from scratch and mark every step 'Memory contribution: none - unrelated - no retrieved memory applies'.\n\n"
-        )
 
     plan_critique = state.get("plan_critique_result")
     if state.get("plan") and plan_critique and not plan_critique.get("passed", True):
         system_content += (
-            f"Previous Plan (needs revision):\n{state['plan']}\n\n"
-            f"Revision Hints:\n{plan_critique.get('repair_hints', '')}\n\n"
+            f"\n\nPrevious plan (needs revision):\n{state['plan']}\n\n"
+            f"Revision hints:\n{plan_critique.get('repair_hints', '')}"
         )
 
-    system_message = SystemMessage(content=system_content)
-    return [system_message, HumanMessage(content=state["user_query"])]
+    return [SystemMessage(content=system_content), HumanMessage(content=state["user_query"])]
 
 
 def propose_plan(state: AgentState) -> str:
@@ -166,43 +172,28 @@ def propose_plan(state: AgentState) -> str:
 
 
 def _build_tool_system_content(state: AgentState) -> str:
-    """Build the shared context and tool instructions for data analysis."""
-    system_content = (
-        "You are a smart-home data analysis assistant with access to tools.\n\n"
-        "You have access to a Python execution tool that can analyze the smart home energy consumption data (House_1 dataset).\n"
-        "The DataFrame 'df' is pre-loaded with the following columns:\n"
-        "- Time: Datetime string (YYYY-MM-DD HH:MM:SS)\n"
-        "- Unix: Unix timestamp (seconds since epoch)\n"
-        "- Aggregate: Total power consumption in Watts\n"
-        "- Fridge, Chest_Freezer, Upright_Freezer, Tumble_Dryer, Washing_Machine, Dishwasher, Computer_Site, Television_Site, Electric_Heater: Individual appliance power in Watts\n"
-        "- timestamp: Datetime version of Unix timestamp (for convenient filtering by date/time)\n"
-        "Dataset date range: October 9, 2013 to July 10, 2015 with detailed per-appliance power readings.\n\n"
-        "When the user asks a data analysis question:\n"
-        "1. FIRST read the Memory Context below. For any numeric fact already present\n"
-        "   (e.g. 'Washing Machine March 2014 = 7.36 kWh'), assign it as a Python variable\n"
-        "   at the top of your code (e.g. washing_machine_kwh = 7.36) and use that\n"
-        "   variable in your calculation — do NOT recompute it from the DataFrame.\n"
-        "2. Query the DataFrame only for missing values or an explicitly required verification.\n"
-        "3. Print the result of each calculation.\n"
-        "4. Use proper pandas methods (mean(), sum(), value_counts(), etc.).\n"
-        "5. Handle potential errors gracefully.\n\n"
-        f"Detected Intent: {state['intent']}\n\n"
-        f"Memory Set Verdict: {state.get('memory_set_verdict', 'irrelevant')}\n\n"
-        f"step results : {state.get('tool_result', 'none')}\n\n"
+    """Build the context and rules shared by single-step and multi-step tool prompts."""
+    return (
+        "You are a smart-home data analysis assistant with two tools: a Python tool and submit_final_answer.\n\n"
+        f"{DATA_CONTEXT}\n\n"
+        f"Memory (assessed by the memory evaluator):\n{format_memory_assessment(state)}\n\n"
+        "Rules:\n"
+        "- Take values from [complete] memories as final and from [partial] memories as supplied components. "
+        "Assign them to Python variables and use them; compute only missing components. Do not recompute or verify them unless the user asks.\n"
+        "- Follow [guidance] memories for how to compute.\n"
+        "- Query `df` only for what memory does not supply.\n"
+        "- Print every value you compute.\n"
+        "- Submit the answer with submit_final_answer.\n\n"
+        f"{ANSWER_FORMAT}\n\n"
     )
-
-    if state.get("memory_context"):
-        system_content += f"Memory Context:\n{state['memory_context']}\n\n"
-
-    return system_content
 
 
 def _build_single_step_tool_prompt_messages(state: AgentState) -> list:
     """Build the tool prompt for a question answerable in one execution flow."""
     system_content = _build_tool_system_content(state)
     system_content += (
-        "This is a single-step question. Complete the requested analysis in the current tool flow.\n"
-        "When the answer is complete, call submit_final_answer.\n\n"
+        "This is a single-step question. Compute it in as few Python calls as possible, "
+        "then call submit_final_answer.\n"
     )
 
     system_message = SystemMessage(content=system_content)
@@ -215,22 +206,14 @@ def _build_multi_step_tool_prompt_messages(state: AgentState) -> list:
 
     if state.get("plan"):
         system_content += (
-            f"Memory retrieved for the current step:\n{state['step_specific_memory']}\n\n"
-            "Prefer this step memory when it applies; the Memory Context above is the broader background.\n\n"
-            f"Approved Plan:\n{state['plan']}\n\n"
-            f"You are executing plan step {state['current_step']}. Execute only this step.\n"
-            "Reuse results from completed steps.\n"
-            "The first line of every Python tool call must be a comment declaring long-term memory usage.\n"
-            "Use exactly one of these formats:\n"
-            "# Memory used: none\n"
-            "# Memory used: yes - <specific memory value, recipe, or fact>\n"
-            "# Memory used: partial - <specific memory value, recipe, or fact reused; explain what will be computed from fresh data>\n"
-            "Report only long-term memory used directly in this step.\n"
-            "Values produced by earlier plan steps are intermediate results, not long-term memory.\n"
-            "If this step uses only those intermediate results and does not read from Memory Context, write:\n"
-            "# Memory used: none\n"
-            "Use memory values directly and do not recompute them unless verification is explicitly required.\n"
-            "Do not call submit_final_answer until every plan step is complete.\n\n"
+            f"Approved plan:\n{state['plan']}\n\n"
+            "Memory retrieved for the current step (not evaluated; use it only if it applies):\n"
+            f"{state['step_specific_memory']}\n\n"
+            "Execution rules:\n"
+            f"- You are executing plan step {state['current_step']}. Run only that step, in one Python call, and reuse the results of earlier steps.\n"
+            "- Do not solve future steps or repeat completed steps.\n"
+            f"- The first line of the code must be a comment: `# Plan step {state['current_step']}: <what this step computes>`.\n"
+            "- Call submit_final_answer only after every plan step is done, using the results of the steps.\n\n"
         )
 
     step_feedback = state.get("step_critique_result")
